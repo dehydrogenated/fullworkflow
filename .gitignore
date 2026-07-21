@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.ipynb_checkpoints/
+.DS_Store
+.claude/settings.local.json
+
+# Run artifacts (records + structures written to disk)
+runs/
+*.traj
+*.log
