@@ -143,7 +143,7 @@ REGISTRY: dict[str, Backend] = {
     ),
     "UMA-s": Backend(
         name="UMA-s",
-        env="mlip-mace",
+        env="fairchem",
         loader="fairchem",
         model_path=str(Path.home() / "Desktop/mace_test/models/uma-s-1p2.pt"),
         task="omat",

@@ -175,7 +175,7 @@ integration · spin-constrained backends · fine-tuning arm (Block 2).
 This repo implements the design in `oxide-workflow-design.md` (v0.2). Build it one
 numbered step at a time per §7, running each step before writing the next. Hard
 constraints: (1) models run via subprocess isolation in their own conda envs
-(mace-clean for MACE, mlip-mace for fairchem/UMA — they cannot share an env due to an
+(mace-clean for MACE, fairchem for fairchem/UMA — they cannot share an env due to an
 e3nn version conflict); the orchestrator only launches workers and reads results from
 disk. (2) Every stage's starting structure is the previous stage's relaxed output plus
 a fresh modification — unrelaxed by construction for the current stage; never start a
