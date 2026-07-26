@@ -4,9 +4,11 @@ Each stage's starting structure = previous stage's relaxed output + a fresh
 modification, unrelaxed by construction. This module produces those *unrelaxed*
 starting structures; relaxation is the backend's job (design §3).
 
-``decorate(substrate, modification)`` is the shared vacancy/adsorbate seam. Here the
-vacancy modification is implemented; adsorbate placement is the next slice (§8).
-Site identity is stored as symmetry class + fractional coordinate — never line numbers.
+``decorate(substrate, modification)`` is the shared vacancy/adsorbate seam. Both the
+vacancy modification (remove a representative O) and the adsorbate modification (place a
+fragment at a heuristic height on the relaxed substrate) are implemented here, each
+producing *unrelaxed* candidates keyed by an abstract site identity — symmetry class +
+fractional coordinate, never line numbers.
 """
 
 from __future__ import annotations
@@ -14,11 +16,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from pymatgen.core import Structure
+from pymatgen.analysis.adsorption import AdsorbateSiteFinder
+from pymatgen.core import Molecule, Structure
 from pymatgen.core.surface import SlabGenerator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-from .config import SlabConfig
+from .config import AdsorbateConfig, SlabConfig
 
 
 def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
@@ -82,5 +85,65 @@ def oxygen_vacancy_candidates(
         )
     if not candidates:
         raise RuntimeError("no symmetry-distinct oxygen sites found on slab")
+    candidates.sort(key=lambda c: c.site_id["site_index"])
+    return candidates
+
+
+@dataclass
+class AdsorbateCandidate:
+    """One adsorption-site placement: the decorated (unrelaxed) structure + site id.
+
+    Same ``.structure`` / ``.site_id`` contract as ``VacancyCandidate`` so both flow
+    through the pipeline's shared funnel (the ``decorate`` seam).
+    """
+
+    structure: Structure
+    site_id: dict  # {symmetry_class(=position type), frac_coord, site_index}
+
+
+def adsorbate_candidates(
+    substrate: Structure, config: AdsorbateConfig
+) -> list[AdsorbateCandidate]:
+    """decorate(substrate, adsorbate placement) → one candidate per adsorption-site type.
+
+    Enumerates ontop/bridge/hollow sites with pymatgen ``AdsorbateSiteFinder`` and places
+    the (generic, config-specified) fragment at one symmetry-reduced representative of
+    each requested type — AdsorbML's "try several, keep the minimum" philosophy without
+    its dependencies (§4). The placement is unrelaxed by construction; relaxation is the
+    backend's job. Enumerating on the *same* substrate yields the same ordered site list
+    for both models, so seeded per-site matching aligns (as with vacancies).
+    """
+    molecule = Molecule(list(config.species), [list(c) for c in config.coords])
+    asf = AdsorbateSiteFinder(substrate)
+    sites = asf.find_adsorption_sites(
+        distance=config.site_distance,
+        symm_reduce=config.symm_reduce,
+        positions=list(config.positions),
+    )
+
+    candidates: list[AdsorbateCandidate] = []
+    for i, ptype in enumerate(config.positions):  # deterministic: ontop=0, bridge=1, hollow=2
+        coords_list = sites.get(ptype, [])
+        if not coords_list:
+            continue  # a type with no sites on this surface — skip, don't fabricate one
+        coord = coords_list[0]  # one representative of this adsorption-site type
+        ads = asf.add_adsorbate(molecule, coord)  # unrelaxed placement
+        # Rebuild plainly: drop AdsorbateSiteFinder's per-site bookkeeping properties
+        # (surface_properties, bulk_wyckoff, …) — irrelevant to relaxation and noisy.
+        clean = Structure(ads.lattice, ads.species, ads.frac_coords)
+        candidates.append(
+            AdsorbateCandidate(
+                structure=clean,
+                site_id={
+                    "symmetry_class": ptype,
+                    "frac_coord": [
+                        float(x) for x in substrate.lattice.get_fractional_coords(coord)
+                    ],
+                    "site_index": i,
+                },
+            )
+        )
+    if not candidates:
+        raise RuntimeError("no adsorption sites found on substrate")
     candidates.sort(key=lambda c: c.site_id["site_index"])
     return candidates

@@ -1,9 +1,14 @@
-"""Step 5 (fast, model-free): slab cut + symmetry-distinct O-vacancy enumeration."""
+"""Step 5 (fast, model-free): slab cut + symmetry-distinct O-vacancy enumeration and
+adsorbate-site placement (the two ``decorate`` modifications)."""
 
 from __future__ import annotations
 
-from oxide_workflow.config import SlabConfig
-from oxide_workflow.stages import make_slab, oxygen_vacancy_candidates
+from oxide_workflow.config import AdsorbateConfig, SlabConfig
+from oxide_workflow.stages import (
+    adsorbate_candidates,
+    make_slab,
+    oxygen_vacancy_candidates,
+)
 from oxide_workflow.structures import rutile_tio2
 
 
@@ -27,6 +32,25 @@ def test_vacancy_candidates_are_distinct_and_carry_site_identity():
         assert set(c.site_id) == {"symmetry_class", "frac_coord", "site_index"}
         assert len(c.site_id["frac_coord"]) == 3
     # Deterministic ordering by site index (enables seeded per-stage site matching).
+    idxs = [c.site_id["site_index"] for c in cands]
+    assert idxs == sorted(idxs)
+
+
+def test_adsorbate_candidates_carry_site_identity():
+    slab = make_slab(rutile_tio2(), SlabConfig())
+    cfg = AdsorbateConfig()  # single H, ontop/bridge/hollow
+    cands = adsorbate_candidates(slab, cfg)
+
+    n_ads = len(cfg.species)
+    assert 1 <= len(cands) <= len(cfg.positions)
+    for c in cands:
+        # The fragment's atoms were added on top of the substrate (unrelaxed placement).
+        assert len(c.structure) == len(slab) + n_ads
+        # Site identity is symmetry class + fractional coordinate (never line numbers).
+        assert set(c.site_id) == {"symmetry_class", "frac_coord", "site_index"}
+        assert c.site_id["symmetry_class"] in cfg.positions
+        assert len(c.site_id["frac_coord"]) == 3
+    # Deterministic ordering by site index (enables seeded per-site matching).
     idxs = [c.site_id["site_index"] for c in cands]
     assert idxs == sorted(idxs)
 
