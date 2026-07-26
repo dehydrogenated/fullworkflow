@@ -29,11 +29,16 @@ def build_calculator(spec: dict):
     if loader == "mace":
         from mace.calculators import mace_mp
 
-        return mace_mp(
+        kwargs = dict(
             model=spec["model_path"],
             device=spec.get("device", "cpu"),
             default_dtype=spec.get("dtype", "float64"),
         )
+        # Multi-head models (mace-mh-1) need the exact head string, or MACE silently
+        # falls back to the last head and returns duplicate numbers.
+        if spec.get("head"):
+            kwargs["head"] = spec["head"]
+        return mace_mp(**kwargs)
     if loader == "fairchem":
         from fairchem.core import FAIRChemCalculator, pretrained_mlip
 
@@ -68,10 +73,20 @@ def main(jobfile: str) -> None:
 
         target = FrechetCellFilter(atoms)
 
+    # Extended-xyz trajectory of the *real* atoms (not the FrechetCellFilter target) so
+    # each frame carries evolving positions and the cell (Lattice=) for VESTA/OVITO.
+    traj = workdir / spec.get("trajectory_xyz", "trajectory.xyz")
+    if traj.exists():
+        traj.unlink()
+    write(traj, atoms, format="extxyz", append=True)  # frame 0 = initial (calc already primed)
+
     opt = optimizer(target, logfile=str(workdir / "opt.log"))
+    opt.attach(lambda: write(traj, atoms, format="extxyz", append=True), interval=1)
     t0 = time.time()
     opt.run(fmax=fmax, steps=max_steps)
     elapsed = time.time() - t0
+
+    n_frames = sum(1 for line in traj.read_text().splitlines() if line.strip().isdigit())
 
     final_fmax = max_force(atoms)  # physical atomic forces, not filter-generalized
     result = {
@@ -84,6 +99,8 @@ def main(jobfile: str) -> None:
         "loader": spec["loader"],
         "model_path": spec.get("model_path"),
         "relax_cell": bool(spec.get("relax_cell", False)),
+        "trajectory": traj.name,
+        "n_frames": n_frames,
     }
     write(workdir / spec["output_poscar"], atoms, format="vasp")
     (workdir / spec["result_json"]).write_text(json.dumps(result, indent=2))

@@ -1,4 +1,5 @@
-"""Backends — the one interface every model sits behind (design §6).
+"""
+Backends — the one interface every model sits behind
 
 ``relax(structure, backend) -> RelaxResult`` (relaxed structure, energy, trajectory
 metadata). Models live in mutually incompatible conda envs, so the orchestrator never
@@ -37,6 +38,7 @@ class Backend:
     device: str = "cpu"
     dtype: str = "float64"
     task: str = "omat"  # fairchem/UMA task head; ignored by other loaders
+    head: Optional[str] = None  # MACE multi-head selector (e.g. "omat_pbe"); None = model default
     fmax: float = 0.05  # eV/Å convergence
     max_steps: int = 500
     optimizer: str = "FIRE"
@@ -92,10 +94,12 @@ def relax(
         "device": backend.device,
         "dtype": backend.dtype,
         "task": backend.task,
+        "head": backend.head,
         "fmax": overrides.get("fmax", backend.fmax),
         "max_steps": overrides.get("max_steps", backend.max_steps),
         "optimizer": overrides.get("optimizer", backend.optimizer),
         "relax_cell": relax_cell,
+        "trajectory_xyz": "trajectory.xyz",
     }
     jobfile = work / "job.json"
     jobfile.write_text(json.dumps(spec, indent=2))
@@ -113,6 +117,8 @@ def relax(
 
     result = json.loads((work / result_json).read_text())
     relaxed = Structure.from_file(work / out_poscar)
+    traj_path = work / result.get("trajectory", "trajectory.xyz")
+    opt_log = work / "opt.log"
     return RelaxResult(
         structure=relaxed,
         energy=result["energy"],
@@ -127,29 +133,67 @@ def relax(
             "elapsed_s": result["elapsed_s"],
             "relax_cell": relax_cell,
             "workdir": str(work),
+            # journey artifacts surfaced for the hierarchical writer (design: OUTCAR + xyz)
+            "trajectory": str(traj_path) if traj_path.exists() else None,
+            "n_frames": result.get("n_frames"),
+            "opt_log": opt_log.read_text() if opt_log.exists() else "",
         },
     )
 
 
 # --- Registry: prototype backends (models cached locally; see design §7) -------------
+#
+# Two multi-output checkpoints, each exposing several heads/tasks. Every head/task is
+# registered as its own Backend (same file, different selector) so any can be picked as
+# reference or candidate and lands in its own tree folder.
+#
+#   MACE  mace-mh-1.model   → heads via mace_mp(head=...)   (env: mace-clean)
+#   UMA   uma-s-1p2.pt      → tasks via task_name=...       (env: fairchem)
+#
+# The reference is mace-mh-1's OMat24 (PBE) head — the updated OMat24 that benchmarked
+# more accurately than the standalone cached MACE-OMAT24 it replaces.
+
+MACE_MH1 = str(Path.home() / "Desktop/mace_test/models/mace-mh-1.model")
+UMA_CKPT = str(Path.home() / "Desktop/mace_test/models/uma-s-1p2.pt")
+
+
+def _mace(name: str, head: str, labels: tuple[str, ...]) -> Backend:
+    return Backend(
+        name=name, env="mace-clean", loader="mace", model_path=MACE_MH1,
+        head=head, training_labels=labels,
+    )
+
+
+def _uma(name: str, task: str, labels: tuple[str, ...]) -> Backend:
+    return Backend(
+        name=name, env="fairchem", loader="fairchem", model_path=UMA_CKPT,
+        task=task, training_labels=labels,
+    )
+
 
 REGISTRY: dict[str, Backend] = {
-    "MACE-OMAT24": Backend(
-        name="MACE-OMAT24",
-        env="mace-clean",
-        loader="mace",
-        model_path=str(Path.home() / ".cache/mace/maceomat0mediummodel"),
-        training_labels=("OMat24",),
-    ),
-    "UMA-s": Backend(
-        name="UMA-s",
-        env="fairchem",
-        loader="fairchem",
-        model_path=str(Path.home() / "Desktop/mace_test/models/uma-s-1p2.pt"),
-        task="omat",
-        training_labels=("OMat24", "OC20", "OMol", "ODAC", "OMC"),
-    ),
+    # ---- MACE mace-mh-1 heads (mace_test.py: the model's real heads) --------------------
+    # Reference: the OMat24 PBE head (bulk-mat, mixed-Hamiltonian) — the updated OMat24.
+    "MACE-mh1-omat": _mace("MACE-mh1-omat", "omat_pbe", ("OMat24", "PBE")),
+    "MACE-mh1-mp": _mace("MACE-mh1-mp", "mp_pbe_refit_add", ("MPtrj", "PBE")),
+    "MACE-mh1-oc20": _mace("MACE-mh1-oc20", "oc20_usemppbe", ("OC20", "PBE-surf")),
+    "MACE-mh1-matpes": _mace("MACE-mh1-matpes", "matpes_r2scan", ("MatPES", "r2SCAN")),
+    "MACE-mh1-spice": _mace("MACE-mh1-spice", "spice_wB97M", ("SPICE", "wB97M")),
+    "MACE-mh1-omol": _mace("MACE-mh1-omol", "omol", ("OMol", "molec")),
+    # ---- UMA uma-s-1p2 tasks (uma_test.py: FAIRChem task heads) -------------------------
+    "UMA-oc22": _uma("UMA-oc22", "oc22", ("OC22", "oxide-cat")),   # prime oxide-cat candidate
+    "UMA-oc20": _uma("UMA-oc20", "oc20", ("OC20", "cat")),
+    "UMA-oc25": _uma("UMA-oc25", "oc25", ("OC25", "e-cat")),
+    "UMA-omat": _uma("UMA-omat", "omat", ("OMat24", "bulk-mat")),
+    "UMA-omol": _uma("UMA-omol", "omol", ("OMol", "molec")),
+    "UMA-odac": _uma("UMA-odac", "odac", ("ODAC", "MOF")),
+    "UMA-omc": _uma("UMA-omc", "omc", ("OMC", "mol-cryst")),
 }
+
+# Convenience groupings for candidate sweeps (every head/task, minus the reference).
+MACE_HEADS = tuple(n for n in REGISTRY if n.startswith("MACE-mh1-"))
+UMA_TASKS = tuple(n for n in REGISTRY if n.startswith("UMA-"))
+ALL_CANDIDATES = tuple(n for n in (*MACE_HEADS, *UMA_TASKS) if n != "MACE-mh1-omat")
 
 
 def get_backend(name: str) -> Backend:

@@ -19,8 +19,8 @@ from oxide_workflow.records import read_divergence_table
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OXIDE_RUN_SLOW") != "1"
-    or not os.path.exists(get_backend("MACE-OMAT24").interpreter())
-    or not os.path.exists(get_backend("UMA-s").interpreter()),
+    or not os.path.exists(get_backend("MACE-mh1-omat").interpreter())
+    or not os.path.exists(get_backend("UMA-oc22").interpreter()),
     reason="set OXIDE_RUN_SLOW=1 and have both model envs to run the full pipeline",
 )
 

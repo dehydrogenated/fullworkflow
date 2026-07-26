@@ -15,6 +15,7 @@ handoff format across the subprocess-isolation boundary.
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
@@ -153,3 +154,138 @@ def read_divergence_table(path: str | Path) -> list[DivergenceRecord]:
     """Read a JSONL divergence table back into records."""
     lines = Path(path).read_text().splitlines()
     return [DivergenceRecord.from_dict(json.loads(ln)) for ln in lines if ln.strip()]
+
+
+# --- Hierarchical run tree (browsable, VESTA-friendly layout; design: reorganize runs/) ---
+#
+# One partitioned tree replaces the old flat ``structures/`` dump. Shared dimensions
+# (model, protocol, stage, site) are encoded in the *path*, so lower levels never repeat
+# them. Aggregate directories carry a ``header.json`` (timing rollups); each leaf
+# relaxation folder carries a lightweight text ``OUTCAR`` (summary block + per-step
+# energies) plus ``POSCAR`` (initial) / ``CONTCAR`` (final) / ``trajectory.xyz``.
+
+HEADER_NAME = "header.json"
+OUTCAR_NAME = "OUTCAR"
+POSCAR_NAME = "POSCAR"
+CONTCAR_NAME = "CONTCAR"
+TRAJECTORY_NAME = "trajectory.xyz"
+
+_SINGLE_RELAX_STAGES = ("bulk", "slab")  # one relaxation → files live directly in the stage dir
+
+
+def _sanitize(text: str) -> str:
+    """Filesystem-safe token: strip path separators and whitespace."""
+    return "".join(c for c in str(text).replace("/", "").replace("\\", "") if not c.isspace())
+
+
+def stage_dir(run_dir: str | Path, model: str, protocol: str, stage: str) -> Path:
+    """Directory for one stage of one model+protocol chain (the path rule).
+
+    - ``protocol == "reference"`` → ``<run>/<model>/<stage>`` (no protocol level)
+    - ``stage == "bulk"``          → ``<run>/<model>/bulk`` (candidate's shared warm start)
+    - otherwise                    → ``<run>/<model>/<protocol>/<stage>``
+    """
+    base = Path(run_dir) / model
+    if protocol == "reference":
+        return base / stage
+    if stage == "bulk":
+        return base / "bulk"
+    return base / protocol / stage
+
+
+def relax_subfolder_name(stage: str, site_id: Optional[dict]) -> str:
+    """Leaf subfolder name for a candidate, or ``""`` for single-relaxation stages.
+
+    - vacancy   → ``site<site_index>_<sanitized symmetry_class>``
+    - adsorbate → the ``symmetry_class`` verbatim (``ontop``/``bridge``/``hollow``)
+    - bulk/slab → ``""`` (files live directly in the stage dir)
+    """
+    if stage in _SINGLE_RELAX_STAGES or not site_id:
+        return ""
+    sym = site_id.get("symmetry_class", "")
+    if stage == "vacancy":
+        return f"site{site_id.get('site_index')}_{_sanitize(sym)}"
+    return _sanitize(sym)
+
+
+def leaf_dir(stage_directory: str | Path, stage: str, site_id: Optional[dict]) -> Path:
+    """Leaf relaxation folder inside ``stage_directory`` (adds a per-candidate subfolder)."""
+    sub = relax_subfolder_name(stage, site_id)
+    stage_directory = Path(stage_directory)
+    return stage_directory / sub if sub else stage_directory
+
+
+def write_header(directory: str | Path, header: dict) -> Path:
+    """Write an aggregate-level ``header.json`` (run/model/protocol/stage scope)."""
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / HEADER_NAME
+    path.write_text(json.dumps(header, indent=2))
+    return path
+
+
+# Header keys rendered (in order) into the OUTCAR summary block, when present.
+_OUTCAR_LINES = (
+    ("model", "model"),
+    ("stage", "stage"),
+    ("protocol", "protocol"),
+    ("facet", "facet"),
+    ("composition", "composition"),
+    ("site", "site"),
+    ("canonical", "canonical"),
+    ("optimizer", "optimizer"),
+    ("fmax_target", "fmax_target (eV/A)"),
+    ("converged", "converged"),
+    ("nsteps", "nsteps"),
+    ("n_frames", "n_frames"),
+    ("elapsed_s", "elapsed_s"),
+    ("start_fmax", "start_fmax (eV/A)"),
+    ("energy", "final_energy (eV)"),
+    ("fmax", "final_fmax (eV/A)"),
+)
+
+
+def format_outcar(header: dict, opt_log: str = "") -> str:
+    """Compose the lightweight text ``OUTCAR``: summary block + per-step energy table.
+
+    Positions are intentionally omitted (they live in POSCAR/CONTCAR/trajectory.xyz),
+    so this stays tiny versus a real VASP OUTCAR. ``opt_log`` is ASE's optimizer log
+    (per-step ``step / time / energy / fmax``); an empty log yields the block only.
+    """
+    out = ["# lightweight OUTCAR (energies only; geometry in POSCAR/CONTCAR/trajectory.xyz)"]
+    for key, label in _OUTCAR_LINES:
+        if key in header and header[key] is not None:
+            out.append(f"{label}: {header[key]}")
+    if opt_log.strip():
+        out.append("#")
+        out.append("# per-step (from ASE optimizer log; fmax is optimizer-generalized for cell relaxations):")
+        out.append(opt_log.rstrip("\n"))
+    return "\n".join(out) + "\n"
+
+
+def write_relaxation(
+    dest: str | Path,
+    *,
+    initial: Structure,
+    final: Structure,
+    trajectory_src: Optional[str | Path],
+    header: dict,
+    opt_log: str = "",
+) -> Path:
+    """Write one leaf relaxation folder: OUTCAR + POSCAR + CONTCAR + trajectory.xyz.
+
+    - ``POSCAR``  = the (unrelaxed) stage input; ``CONTCAR`` = the relaxed output (priority).
+    - ``trajectory.xyz`` copied from ``trajectory_src`` when present (graceful skip if the
+      worker produced none — e.g. an ASE-less backend).
+    - ``OUTCAR`` composed from ``header`` + ``opt_log`` (per-step energies).
+
+    Returns the leaf directory.
+    """
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
+    initial.to(filename=str(dest / POSCAR_NAME), fmt="poscar")
+    final.to(filename=str(dest / CONTCAR_NAME), fmt="poscar")
+    if trajectory_src is not None and Path(trajectory_src).exists():
+        shutil.copyfile(trajectory_src, dest / TRAJECTORY_NAME)
+    (dest / OUTCAR_NAME).write_text(format_outcar(header, opt_log))
+    return dest
