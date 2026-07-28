@@ -22,10 +22,14 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+import numpy as np
+from ase.data import atomic_numbers, covalent_radii
+
 from .backends import Backend, RelaxResult, get_backend, relax
+from .checks import placement_quality_flags
 from .config import RunConfig
 from .diverge import diverge
 from .records import (
@@ -62,10 +66,56 @@ class StageOutput:
     opt_log: str = ""
     canonical: bool = False
     geometry_source: str = ""
+    flags: list[str] = field(default_factory=list)
 
 
 def _facet(cfg: RunConfig, stage: str) -> str:
     return "".join(map(str, cfg.slab.miller_index)) if stage != "bulk" else ""
+
+
+def _adsorbate_max_disp(initial, final, n_ads: int) -> float | None:
+    """Max displacement (Å, min-image) of the last ``n_ads`` atoms, initial → final.
+
+    The adsorbate fragment is appended last by ``adsorbate_candidates`` and relaxation
+    preserves atom order, so the trailing ``n_ads`` sites are the adsorbate. Returns
+    ``None`` if the atom counts don't line up (nothing to compare)."""
+    if n_ads <= 0 or len(initial) != len(final) or len(final) < n_ads:
+        return None
+    idx = list(range(len(final) - n_ads, len(final)))
+    frac = final.frac_coords[idx] - initial.frac_coords[idx]
+    frac -= np.round(frac)  # minimum image under PBC
+    cart = frac @ final.lattice.matrix
+    return float(np.linalg.norm(cart, axis=1).max())
+
+
+def _adsorbate_start_distance(initial, n_ads: int):
+    """(distance Å, covalent bond length Å) of the adsorbate binding atom to its nearest
+    surface atom *at placement*.
+
+    The binding atom is the first adsorbate atom (``coords[0]`` in the fragment), appended
+    at index ``len - n_ads``. Compares its placement distance to the nearest substrate atom
+    against the covalent bond length for that element pair — the reference for "spawned on
+    the answer" (too close) detection. Returns ``(None, None)`` if there's nothing to
+    compare."""
+    if n_ads <= 0 or len(initial) <= n_ads:
+        return None, None
+    ads_i = len(initial) - n_ads
+    L = initial.lattice
+    best_j, best_d = None, 1e9
+    for j in range(len(initial) - n_ads):
+        d = initial.frac_coords[ads_i] - initial.frac_coords[j]
+        d -= np.round(d)  # minimum image under PBC
+        dist = float(np.linalg.norm(d @ L.matrix))
+        if dist < best_d:
+            best_j, best_d = j, dist
+    if best_j is None:
+        return None, None
+    ads_sym = str(initial[ads_i].specie)
+    surf_sym = str(initial[best_j].specie)
+    bond = float(
+        covalent_radii[atomic_numbers[surf_sym]] + covalent_radii[atomic_numbers[ads_sym]]
+    )
+    return best_d, bond
 
 
 def _relax_header(
@@ -79,6 +129,8 @@ def _relax_header(
     site_id: dict | None,
     canonical: bool,
     geometry_source: str,
+    adsorbate_max_disp: float | None,
+    flags: list[str],
 ) -> dict:
     """Leaf-scope header dict: everything the OUTCAR summary block reports (design §5)."""
     site = relax_subfolder_name(stage, site_id) or "-" if site_id else "-"
@@ -101,6 +153,8 @@ def _relax_header(
         "energy": res.energy,
         "fmax": res.fmax,
         "geometry_source": geometry_source,
+        "adsorbate_max_disp": adsorbate_max_disp,
+        "flags": flags,
     }
 
 
@@ -130,12 +184,34 @@ def _relax_record(
         max_steps=cfg.relax.max_steps,
         optimizer=cfg.relax.optimizer,
     )
+    # Post-relaxation sanity flags. The adsorbate displacement is the direct evidence of a
+    # non-interacting placement (adsorbate frozen at its start); start_fmax is meaningful
+    # for any stage. Only compute the adsorbate move on the adsorbate stage.
+    ads_max_disp = (
+        _adsorbate_max_disp(structure, res.structure, len(cfg.adsorbate.species))
+        if stage == "adsorbate"
+        else None
+    )
+    start_ads_distance, ads_bond_length = (
+        _adsorbate_start_distance(structure, len(cfg.adsorbate.species))
+        if stage == "adsorbate"
+        else (None, None)
+    )
+    flags = placement_quality_flags(
+        start_fmax=res.start_fmax,
+        fmax_target=cfg.relax.fmax,
+        nsteps=res.nsteps if stage == "adsorbate" else None,
+        adsorbate_max_disp=ads_max_disp,
+        start_ads_distance=start_ads_distance,
+        ads_bond_length=ads_bond_length,
+    )
     sdir = stage_dir(outdir, backend.name, protocol, stage)
     leaf = leaf_dir(sdir, stage, site_id)
     header = _relax_header(
         res, backend, cfg,
         stage=stage, protocol=protocol, facet=_facet(cfg, stage),
         site_id=site_id, canonical=canonical, geometry_source=geometry_source,
+        adsorbate_max_disp=ads_max_disp, flags=flags,
     )
     opt_log = res.meta.get("opt_log", "")
     write_relaxation(
@@ -160,6 +236,7 @@ def _relax_record(
         opt_log=opt_log,
         canonical=canonical,
         geometry_source=geometry_source,
+        flags=flags,
     )
 
 
@@ -267,6 +344,7 @@ def _emit(
         protocol=protocol,
         polymorph=cfg.polymorph,
         facet=_facet(cfg, stage),
+        flags=cand_out.flags,
     )
     append_divergence(table, rec)
     return rec

@@ -42,13 +42,17 @@ def test_adsorbate_candidates_carry_site_identity():
     cands = adsorbate_candidates(slab, cfg)
 
     n_ads = len(cfg.species)
-    assert 1 <= len(cands) <= len(cfg.positions)
+    # Densified sampling: every symmetry-reduced rep of each requested type, so the count
+    # is at least one per available type (typically several more), not capped at one each.
+    assert len(cands) >= 1
     for c in cands:
         # The fragment's atoms were added on top of the substrate (unrelaxed placement).
         assert len(c.structure) == len(slab) + n_ads
         # Site identity is symmetry class + fractional coordinate (never line numbers).
         assert set(c.site_id) == {"symmetry_class", "frac_coord", "site_index"}
-        assert c.site_id["symmetry_class"] in cfg.positions
+        # Arm 1 uses a geometric type; arm 2 uses an ``atop_<element><wyckoff>`` label.
+        sc = c.site_id["symmetry_class"]
+        assert sc in cfg.positions or sc.startswith("atop_")
         assert len(c.site_id["frac_coord"]) == 3
     # Deterministic ordering by site index (enables seeded per-site matching).
     idxs = [c.site_id["site_index"] for c in cands]

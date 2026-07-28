@@ -66,9 +66,9 @@ def test_leaf_subfolder_names(tmp_path):
     vac_site = {"symmetry_class": "Ti 2c", "site_index": 4}
     assert relax_subfolder_name("vacancy", vac_site) == "site4_Ti2c"  # spaces stripped
     assert leaf_dir(sdir, "vacancy", vac_site) == sdir / "site4_Ti2c"
-    # adsorbate → symmetry_class verbatim
+    # adsorbate → site-indexed name (densified sampling: type alone isn't unique)
     ads_site = {"symmetry_class": "ontop", "site_index": 0}
-    assert relax_subfolder_name("adsorbate", ads_site) == "ontop"
+    assert relax_subfolder_name("adsorbate", ads_site) == "site0_ontop"
     # single-relax stages → no subfolder (files live in the stage dir)
     assert relax_subfolder_name("bulk", None) == ""
     assert leaf_dir(sdir, "slab", None) == sdir
@@ -210,7 +210,16 @@ def test_pipeline_builds_full_tree_with_fake_backend(tmp_path, monkeypatch):
     vac_sites = [d.name for d in (ref / "vacancy").iterdir() if d.is_dir()]
     assert vac_sites and all(s.startswith("site") for s in vac_sites)
     ads_positions = {d.name for d in (ref / "adsorbate").iterdir() if d.is_dir()}
-    assert ads_positions <= {"ontop", "bridge", "hollow"} and ads_positions
+    # Densified geometric arm (ontop/bridge/hollow) + covalent-radii atom-seeding arm
+    # (atop_<element><wyckoff>); every leaf is site-indexed for uniqueness.
+    assert ads_positions and all(
+        d.startswith("site")
+        and (
+            d.split("_", 1)[1] in {"ontop", "bridge", "hollow"}
+            or d.split("_", 1)[1].startswith("atop")
+        )
+        for d in ads_positions
+    )
 
     # exactly one canonical per stage (single-relax stages count their sole OUTCAR)
     assert _canonical_count(ref / "bulk") == 1

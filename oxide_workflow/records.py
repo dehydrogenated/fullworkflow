@@ -197,13 +197,15 @@ def relax_subfolder_name(stage: str, site_id: Optional[dict]) -> str:
     """Leaf subfolder name for a candidate, or ``""`` for single-relaxation stages.
 
     - vacancy   → ``site<site_index>_<sanitized symmetry_class>``
-    - adsorbate → the ``symmetry_class`` verbatim (``ontop``/``bridge``/``hollow``)
+    - adsorbate → ``site<site_index>_<position type>`` (densified sampling places several
+      sites of the same type — e.g. multiple distinct ``ontop`` — so the type alone is no
+      longer unique; the site index disambiguates them)
     - bulk/slab → ``""`` (files live directly in the stage dir)
     """
     if stage in _SINGLE_RELAX_STAGES or not site_id:
         return ""
     sym = site_id.get("symmetry_class", "")
-    if stage == "vacancy":
+    if stage in ("vacancy", "adsorbate"):
         return f"site{site_id.get('site_index')}_{_sanitize(sym)}"
     return _sanitize(sym)
 
@@ -242,6 +244,8 @@ _OUTCAR_LINES = (
     ("start_fmax", "start_fmax (eV/A)"),
     ("energy", "final_energy (eV)"),
     ("fmax", "final_fmax (eV/A)"),
+    ("adsorbate_max_disp", "adsorbate_max_disp (A)"),
+    ("flags", "flags"),
 )
 
 
@@ -255,7 +259,12 @@ def format_outcar(header: dict, opt_log: str = "") -> str:
     out = ["# lightweight OUTCAR (energies only; geometry in POSCAR/CONTCAR/trajectory.xyz)"]
     for key, label in _OUTCAR_LINES:
         if key in header and header[key] is not None:
-            out.append(f"{label}: {header[key]}")
+            value = header[key]
+            if isinstance(value, (list, tuple)):
+                if not value:
+                    continue  # empty flag list → nothing to report
+                value = "; ".join(str(v) for v in value)
+            out.append(f"{label}: {value}")
     if opt_log.strip():
         out.append("#")
         out.append("# per-step (from ASE optimizer log; fmax is optimizer-generalized for cell relaxations):")
