@@ -31,10 +31,7 @@ from oxide_workflow.stages import adsorbate_candidates
 SLAB = Path("runs/mace_sweep/MACE-mh1-omat/slab/CONTCAR")
 
 # Adsorbate fragments to sweep. coords[0] is the *binding* atom (placed at each site); for a
-# molecule the rest hang off it in the given geometry. site_distance_by_species is cleared to
-# () so every placement uses the covalent-radii + seed_standoff fallback — the per-adsorbate
-# automation, so H/C/O each get their own correct standoff with no hand-tuned per-species
-# override (the H-tuned O:1.4 default would sit on the answer for a C–O or O–O bond).
+# molecule the rest hang off it in the given geometry.
 ADSORBATES = {
     "H": {"species": ("H",), "coords": ((0.0, 0.0, 0.0),)},
     "O": {"species": ("O",), "coords": ((0.0, 0.0, 0.0),)},
@@ -60,12 +57,7 @@ def _nearest_surface_atom(final: Structure, n_ads: int):
 def main(adsorbate: str = "H") -> None:
     spec = ADSORBATES[adsorbate]
     cfg = RunConfig()
-    ads_cfg = replace(
-        cfg.adsorbate,
-        species=spec["species"],
-        coords=spec["coords"],
-        site_distance_by_species=(),  # pure covalent+standoff automation for every species
-    )
+    ads_cfg = replace(cfg.adsorbate, species=spec["species"], coords=spec["coords"])
     out = Path(f"runs/adsorbate_validation_{adsorbate}")
     backend = get_backend(cfg.reference)
     slab = Structure.from_file(SLAB)

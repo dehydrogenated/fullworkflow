@@ -14,7 +14,6 @@ fractional coordinate, never line numbers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 import numpy as np
 from ase.data import atomic_numbers, covalent_radii
@@ -39,65 +38,59 @@ def _target_distance(
 ) -> float:
     """Target adsorbate–surface *bond distance* (Å) to the coordinating atom.
 
-    Explicit per-species control via ``config.site_distance_by_species`` (pin O vs metal,
-    etc.); elements not listed fall back to a covalent-radii estimate + ``seed_standoff`` —
-    the material-agnostic default, so a batch sweep over many compositions needs no manual
-    tuning. This is a *distance*, not a vertical height; the normal placement height is
-    solved from it in ``_normal_height``.
+    Covalent radii + ``seed_standoff`` — element-driven, so a sweep over many compositions
+    needs no manual tuning. This is a *distance*, not a vertical height; the normal
+    placement height is solved from it in ``_placement_z``.
     """
-    table = dict(config.site_distance_by_species)
-    if surface_symbol in table:
-        return float(table[surface_symbol])
     return _covalent_height(surface_symbol, adsorbate_symbol) + config.seed_standoff
 
 
-def _normal_height(target_distance: float, lateral: float, floor: float) -> float:
-    """Surface-normal height that puts the adsorbate at ``target_distance`` from an atom
-    sitting ``lateral`` Å away in-plane: ``sqrt(d² − r²)``, floored.
+def _placement_z(
+    structure: Structure,
+    coord,
+    pool: "set[int]",
+    adsorbate_symbol: str,
+    config: AdsorbateConfig,
+) -> float:
+    """Height (Å) at which to place the adsorbate's binding atom over a site's x,y.
 
-    This is what makes placement lattice-aware rather than purely chemical: for an ontop
-    site (``lateral`` ≈ 0) the height is the full bond length, but for a bridge/hollow site
-    the adsorbate is already laterally displaced from its coordinating atom, so it sits
-    *lower* to keep the same bond length — and how much lower is set by the atom spacing,
-    i.e. the lattice. When the lateral offset exceeds the target (the adsorbate can't reach
-    the atom vertically), clamp to ``floor``.
-    """
-    if lateral >= target_distance:
-        return floor
-    return float(max((target_distance**2 - lateral**2) ** 0.5, floor))
+    pymatgen returns each site at a flat plane-referenced height; only its x,y is kept and
+    the height re-solved here, so placement is species- and lattice-aware. For every exposed
+    atom, solve the z that would put the adsorbate exactly at its target bond distance
+    (``sqrt(d² − lateral²)`` above it) and take the largest. The winning atom is then the
+    binding constraint and every other one is at or beyond its own bond distance, so the
+    placement clears the whole neighbourhood rather than a single reference atom.
 
+    Solving against the *nearest* atom instead is ambiguous exactly where it matters: a
+    bridge site is equidistant from both flanking atoms by construction, so when those sit
+    at different heights (the bridging O vs the recessed Ti on rutile(110)) the tie-break
+    moves the adsorbate by over an Å and can drop it inside the higher neighbour.
 
-def _nearest_surface_atom(
-    structure: Structure, coord, depth: float
-) -> "tuple[int, float] | None":
-    """(index, lateral distance Å) of the top-layer atom closest *laterally* to a site.
-
-    Arm-1's geometric sites (ontop/bridge/hollow) come out at a flat plane-referenced
-    height; to make placement species- and lattice-aware we identify the coordinating
-    surface atom the site sits over (nearest in-plane) and re-reference the placement to
-    that atom's z + a solved normal height. ``depth`` is the top-layer window: keep it thin
-    (``surface_layer_tol``) so a bridge/hollow midpoint keys off the topmost flanking atoms
-    (the bridging O's) rather than the recessed cation directly beneath it. For an ontop
-    site this is the atom directly below (lateral ≈ 0); for bridge/hollow it is the nearest
-    top-layer atom (lateral > 0).
+    When no exposed atom is within its bond distance laterally there is nothing to solve
+    against — fall back to ``min_normal_height`` above the laterally closest one.
     """
     L = structure.lattice
-    cart = structure.cart_coords
     frac = structure.frac_coords
-    zmax = float(cart[:, 2].max())
+    cart = structure.cart_coords
     cf = L.get_fractional_coords(coord)
-    best_i, best_d = None, 1e9
-    for i in range(len(structure)):
-        if cart[i][2] <= zmax - depth:
-            continue
+    solved: "float | None" = None
+    nearest_i, nearest_lat = None, 1e9
+    for i in pool:
         d = frac[i] - cf
         d[:2] -= np.round(d[:2])  # min-image in-plane
         lateral = float(np.linalg.norm((d @ L.matrix)[:2]))
-        if lateral < best_d:
-            best_i, best_d = i, lateral
-    if best_i is None:
-        return None
-    return best_i, best_d
+        if lateral < nearest_lat:
+            nearest_i, nearest_lat = i, lateral
+        target = _target_distance(str(structure[i].specie), adsorbate_symbol, config)
+        if lateral < target:
+            z = cart[i][2] + (target**2 - lateral**2) ** 0.5
+            if solved is None or z > solved:
+                solved = z
+    if solved is not None:
+        return float(solved)
+    if nearest_i is None:
+        return float(coord[2])
+    return float(cart[nearest_i][2] + config.min_normal_height)
 
 
 def exposed_surface_atoms(
@@ -281,15 +274,21 @@ def adsorbate_candidates(
 ) -> list[AdsorbateCandidate]:
     """decorate(substrate, adsorbate placement) → one candidate per distinct surface site.
 
-    Enumerates ontop/bridge/hollow sites with pymatgen ``AdsorbateSiteFinder`` and places
-    the (generic, config-specified) fragment at *every* symmetry-reduced representative of
-    each requested type — AdsorbML's "try several, keep the minimum" philosophy without its
-    dependencies (§4). This densified sampling (all reps, not just the first of each type)
-    is what lets the funnel's energy ranking discover the real binding site instead of
-    betting the run on whichever site pymatgen happened to list first. The placement is
-    unrelaxed by construction; relaxation is the backend's job. Enumerating on the *same*
-    substrate yields the same ordered site list for both models, so seeded per-site matching
-    aligns (as with vacancies).
+    Sites come from a Delaunay triangulation over the atoms the vacuum can *see*
+    (``exposed_surface_atoms``), not over pymatgen's default height window. That matters on
+    a rumpled oxide: the window admits only the topmost row (the bridging O's on
+    rutile(110)), so the 5-fold Ti sitting ~1 Å lower — the canonical adsorption site —
+    never becomes a vertex, and every bridge/hollow is a midpoint of the top-O mesh alone.
+    Feeding the exposed set in instead makes Ti ontop, Ti–O bridge and hollow sites all
+    first-class candidates from one algorithm.
+
+    The fragment is placed at *every* symmetry-reduced representative of each requested type
+    — AdsorbML's "try several, keep the minimum" philosophy without its dependencies (§4) —
+    so the funnel's energy ranking discovers the real binding site instead of betting the
+    run on whichever site pymatgen happened to list first. Placements are unrelaxed by
+    construction; relaxation is the backend's job. Enumerating on the *same* substrate
+    yields the same ordered site list for both models, so seeded per-site matching aligns
+    (as with vacancies).
 
     ``freeze_bottom_fraction`` re-imposes the slab's bottom-layer freeze after the plain
     rebuild (which drops site properties); the adsorbate atoms sit above the surface and
@@ -298,32 +297,46 @@ def adsorbate_candidates(
     """
     molecule = Molecule(list(config.species), [list(c) for c in config.coords])
     n_ads = len(molecule)
-    ads_symbol = str(config.species[0])  # the binding atom (coords[0]); sets seed height
-    asf = AdsorbateSiteFinder(substrate)
+    ads_symbol = str(config.species[0])  # the binding atom (coords[0]); sets placement height
+    exposed = exposed_surface_atoms(
+        substrate, config.surface_depth, config.exposure_block_radius
+    )
+    # pymatgen's assign_site_properties returns the slab untouched when surface_properties
+    # is already present — that's the seam we use to substitute our own surface-atom set.
+    props = ["surface" if i in exposed else "subsurface" for i in range(len(substrate))]
+    asf = AdsorbateSiteFinder(substrate.copy(site_properties={"surface_properties": props}))
     cutoff = bottom_cutoff_z(substrate, freeze_bottom_fraction)
     L = substrate.lattice
 
     candidates: list[AdsorbateCandidate] = []
-    anchors: list[np.ndarray] = []  # cartesian anchor of each accepted placement (dedup key)
 
-    def _is_duplicate(coord) -> bool:
-        cf = L.get_fractional_coords(coord)
-        for a in anchors:
-            d = cf - L.get_fractional_coords(a)
-            d -= np.round(d)  # full min-image (in-plane + normal)
-            if np.linalg.norm(d @ L.matrix) < config.dedup_tol:
-                return True
-        return False
+    def _clearance(structure: Structure) -> float:
+        """Smallest adsorbate–slab distance as a fraction of that pair's covalent bond
+        length. Below 1.0 the adsorbate is inside bonding range; well below it is *inside*
+        a surface atom, which is an unphysical start no relaxation can be trusted to fix."""
+        frac = structure.frac_coords
+        worst = 1e9
+        for i in range(len(structure) - n_ads, len(structure)):
+            for j in range(len(structure) - n_ads):
+                d = frac[i] - frac[j]
+                d -= np.round(d)  # full min-image
+                dist = float(np.linalg.norm(d @ structure.lattice.matrix))
+                worst = min(
+                    worst,
+                    dist
+                    / _covalent_height(str(structure[j].specie), str(structure[i].specie)),
+                )
+        return worst
 
     def _add(coord, symmetry_class: str) -> None:
         if cutoff is not None and coord[2] <= cutoff + 1e-6:
             return  # top (free) surface only — a placement on the frozen face can't relax
-        if _is_duplicate(coord):
-            return  # arm-1/arm-2 (or within-arm) coincidence — keep the first-seen
         ads = asf.add_adsorbate(molecule, coord)  # unrelaxed placement
         # Rebuild plainly: drop AdsorbateSiteFinder's per-site bookkeeping properties
         # (surface_properties, bulk_wyckoff, …) — irrelevant to relaxation and noisy.
         clean = Structure(ads.lattice, ads.species, ads.frac_coords)
+        if _clearance(clean) < config.min_clearance:
+            return
         # Adsorbate atoms are appended last by add_adsorbate → keep them mobile.
         apply_bottom_freeze(
             clean,
@@ -340,53 +353,16 @@ def adsorbate_candidates(
                 },
             )
         )
-        anchors.append(np.asarray(coord, dtype=float))
 
-    # Arm 1 — geometric (ontop/bridge/hollow), densified: every symmetry-reduced rep of each
-    # type, in deterministic order (config.positions, then pymatgen's list order per type).
-    # pymatgen returns each site at a flat plane-referenced height; we re-reference the
-    # normal distance to the coordinating surface atom so it obeys the per-species standoff
-    # (an H over an O starts lower than an H over a metal).
+    # Only pymatgen's x,y is used — hence no ``distance=`` here; _placement_z sets the height.
     sites = asf.find_adsorption_sites(
-        distance=config.site_distance,
         symm_reduce=config.symm_reduce,
         positions=list(config.positions),
     )
     for ptype in config.positions:
         for coord in sites.get(ptype, []):
-            near = _nearest_surface_atom(substrate, coord, config.surface_layer_tol)
-            if near is not None:
-                base, lateral = near
-                specie = str(substrate[base].specie)
-                d0 = _target_distance(specie, ads_symbol, config)
-                h = _normal_height(d0, lateral, config.min_normal_height)
-                z = substrate[base].coords[2] + h
-                coord = np.array([coord[0], coord[1], z])
-            _add(coord, ptype)
-
-    # Arm 2 — seeding over symmetry-distinct *exposed* surface atoms. Recovers chemically-real
-    # sites the height-window finder misses (e.g. rutile 5-fold Ti). Placed directly above the
-    # atom at its per-species standoff (_species_offset); deduped against arm 1.
-    if config.seed_surface_atoms:
-        exposed = exposed_surface_atoms(
-            substrate, config.surface_depth, config.exposure_block_radius
-        )
-        if exposed:
-            sym = SpacegroupAnalyzer(substrate, symprec=0.1).get_symmetrized_structure()
-            wyckoffs = getattr(sym, "wyckoff_symbols", None)
-            for group_idx, group in enumerate(sym.equivalent_indices):
-                members = sorted(i for i in group if i in exposed)
-                if not members:
-                    continue
-                rep = members[0]  # lowest-index exposed representative → deterministic
-                specie = str(substrate[rep].specie)
-                wy = wyckoffs[group_idx] if wyckoffs else f"g{group_idx}"
-                # Directly atop the atom → lateral 0 → normal height is the full target.
-                height = _target_distance(specie, ads_symbol, config)
-                coord = np.asarray(substrate[rep].coords, dtype=float) + np.array(
-                    [0.0, 0.0, height]
-                )
-                _add(coord, f"atop_{specie}{wy}")
+            z = _placement_z(substrate, coord, exposed, ads_symbol, config)
+            _add(np.array([coord[0], coord[1], z]), ptype)
 
     if not candidates:
         raise RuntimeError("no adsorption sites found on substrate")
