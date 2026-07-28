@@ -1,21 +1,11 @@
-"""Prototype input structures + material resolution.
-
-The design's bulk stage is "MP-ID input" (mp-2657). Until an MP/OPTIMADE source is
-wired in (deferred, §8), this module resolves a material *identifier* (mp-id or alias)
-to a bulk warm-start ``Structure`` via a small local registry. The single prototype
-(rutile TiO2, ``mp-2657``) is the default; a batch run simply passes several identifiers,
-each of which must resolve here (or, later, be fetched from MP/OPTIMADE).
-
-This is *input data*, not pipeline logic — the pipeline stays material-agnostic and asks
-only for ``get_structure(identifier)``.
+"""
+Specify which bulk to start with
+Currently only using MP IDs but expanding to ICSD soon
 """
 
 from __future__ import annotations
-
 from typing import Callable
-
 from pymatgen.core import Lattice, Structure
-
 
 def rutile_tio2() -> Structure:
     """Canonical rutile TiO2 (space group P4_2/mnm), ~experimental lattice.

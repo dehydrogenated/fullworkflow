@@ -17,7 +17,6 @@ class SlabConfig:
     supercell: tuple[int, int] = (4, 2)  # lateral replication (along a, b); dilutes defect images, decrease no. vacancies when multiplied
     freeze_bottom_fraction: float = 0.5  # fix the bottom fraction of slab thickness at bulk positions
 
-
 @dataclass(frozen=True)
 class RelaxConfig:
     fmax: float = 0.05  # eV/Å
@@ -33,7 +32,7 @@ class AdsorbateConfig:
     
     # Which atoms the vacuum can see from one axis — these become the triangulation vertices
     surface_depth: float = 3.0  # Å below the topmost atom to scan for exposed surface atoms
-    exposure_block_radius: float = 1.3  # Å; nothing sits 1.3 A above it
+    exposure_block_radius: float = 1.3  # Å; nothing sits 1.3 A sideways from it
 
     # Where the adsorbate starts
     seed_standoff: float = 0.5  # Å added to the covalent bond length to not be too far or close
