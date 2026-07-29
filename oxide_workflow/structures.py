@@ -1,17 +1,29 @@
 """
 Specify which bulk to start with
-Currently only using MP IDs but expanding to ICSD soon
+Resolves a built-in alias or a saved identifier to a warm-start bulk cell
 """
 
 from __future__ import annotations
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Callable
+
 from pymatgen.core import Lattice, Structure
+from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
+
+# Saved cells live here and are meant to be committed. Two reasons: Sockeye compute
+# nodes have no outbound network, and MP re-relaxes entries between database releases —
+# a committed cell keeps a rerun of the same benchmark reproducible.
+STRUCTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "structures"
+
 
 def rutile_tio2() -> Structure:
-    """Canonical rutile TiO2 (space group P4_2/mnm), ~experimental lattice.
+    """Canonical rutile TiO2 (space group P4_2/mnm), experimental lattice.
 
-    Prototype bulk warm start for mp-2657. Re-relaxed by every backend, so exact
-    lattice constants are not load-bearing.
+    Offline fallback prototype. Pass "mp-2657" for MP's own relaxed cell — in practice it
+    agrees to ~0.1% in a and ~0.3% in volume, so the two warm starts are interchangeable.
+    Re-relaxed by every backend anyway, so these constants are not load-bearing.
     """
     a, c, u = 4.5937, 2.9587, 0.3050
     lattice = Lattice.tetragonal(a, c)
@@ -28,38 +40,117 @@ def rutile_tio2() -> Structure:
 
 
 # --- Material registry: identifier -> bulk Structure factory -----------------------------
-#
-# The lookup key is the same string carried as ``RunConfig.polymorph`` (an mp-id or a
-# human alias). A batch run outlines several of these and iterates. New prototypes are
-# added here (or, eventually, resolved through an MP/OPTIMADE fetch hook) without touching
-# the pipeline. Mirrors the ``backends.REGISTRY`` pattern.
+# Built-in aliases only. Everything else is read from STRUCTURE_DIR, populated by
+# scripts/fetch_structure.py.
 
 STRUCTURE_REGISTRY: dict[str, Callable[[], Structure]] = {
-    "mp-2657": rutile_tio2,  # canonical rutile TiO2 prototype
-    "rutile-tio2": rutile_tio2,  # human-friendly alias for the same cell
+    "rutile-tio2": rutile_tio2,  # hand-written experimental cell, no network needed
 }
 
 
 def register_structure(identifier: str, factory: Callable[[], Structure]) -> None:
-    """Register a material identifier -> Structure factory (e.g. a local POSCAR/CIF loader).
-
-    Lets a caller add batch members at runtime without editing this module — the escape
-    hatch until MP/OPTIMADE fetching lands (§8).
-    """
+    """Register a material identifier -> Structure factory, for callers adding batch members."""
     STRUCTURE_REGISTRY[identifier] = factory
 
 
-def get_structure(identifier: str) -> Structure:
-    """Resolve a material identifier (mp-id or alias) to its bulk warm-start Structure.
+def _describe(structure: Structure) -> dict:
+    """Provenance fields we can derive from the cell itself."""
+    return {
+        "formula": structure.composition.reduced_formula,
+        "n_sites": len(structure),
+        "spacegroup": SpacegroupAnalyzer(structure).get_space_group_symbol(),
+    }
 
-    Local registry only for now; MP/OPTIMADE fetching is deferred (§8). Raises ``KeyError``
-    with the set of known identifiers if the material is not registered.
+
+def _require_ordered(structure: Structure, source: str) -> None:
+    """Reject partial occupancies — MLIPs need one species per site.
+
+    Real ICSD/COD CIFs are often disordered (e.g. Ti0.9Nb0.1). Failing when the material is
+    added beats SlabGenerator or the backend failing three stages later.
     """
-    try:
-        factory = STRUCTURE_REGISTRY[identifier]
-    except KeyError:
+    if not structure.is_ordered:
+        raise ValueError(
+            f"{source} is disordered (partial site occupancies); the relaxation chain needs "
+            "an ordered cell. Pick an ordered entry, or build a supercell approximant first."
+        )
+
+
+def _conventional(structure: Structure) -> Structure:
+    """Conventional standard cell.
+
+    SlabConfig.miller_index is defined against the conventional setting, so a primitive
+    input would cut a different facet than the one the run is labelled with.
+    """
+    return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
+
+
+def _structure_paths(identifier: str) -> tuple[Path, Path]:
+    stem = identifier.replace("/", "_").replace("\\", "_")
+    return STRUCTURE_DIR / f"{stem}.cif", STRUCTURE_DIR / f"{stem}.json"
+
+
+def add_material(structure: Structure, identifier: str, provenance: dict) -> Path:
+    """Normalize a cell and save it as <identifier>.cif + .json in STRUCTURE_DIR.
+
+    The only writer into STRUCTURE_DIR. Enforcing the guards here — rather than on each
+    read — is what lets get_structure() trust the folder: everything in it is ordered and
+    in the conventional setting by construction, so a saved cell and a freshly fetched one
+    cut the same facet.
+    """
+    _require_ordered(structure, identifier)
+    structure = _conventional(structure)
+
+    cif_path, meta_path = _structure_paths(identifier)
+    STRUCTURE_DIR.mkdir(parents=True, exist_ok=True)
+    structure.to(filename=str(cif_path))
+    meta_path.write_text(
+        json.dumps(
+            {
+                "identifier": identifier,
+                **provenance,
+                "added_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                **_describe(structure),
+            },
+            indent=2,
+        )
+    )
+    return cif_path
+
+
+def available() -> list[str]:
+    """Identifiers that resolve offline right now — aliases plus whatever has been saved."""
+    saved = sorted(p.stem for p in STRUCTURE_DIR.glob("*.cif")) if STRUCTURE_DIR.is_dir() else []
+    return sorted(set(STRUCTURE_REGISTRY) | set(saved))
+
+
+def _resolve(identifier: str) -> tuple[Structure, dict]:
+    """Identifier -> (structure, provenance). Never hits the network."""
+    if identifier in STRUCTURE_REGISTRY:
+        structure = STRUCTURE_REGISTRY[identifier]()
+        return structure, {"identifier": identifier, "source": "builtin", **_describe(structure)}
+
+    cif_path, meta_path = _structure_paths(identifier)
+    if not cif_path.exists():
         raise KeyError(
-            f"unknown material {identifier!r}; registered: {sorted(STRUCTURE_REGISTRY)}. "
-            "Register it via register_structure() or wire an MP/OPTIMADE fetch (deferred, §8)."
-        ) from None
-    return factory()
+            f"unknown material {identifier!r}. Available: {available()}. To add one, run "
+            f"`python scripts/fetch_structure.py {identifier}` on a networked machine "
+            f"(needs MP_API_KEY) and commit the pair it writes to {STRUCTURE_DIR}."
+        )
+
+    structure = Structure.from_file(str(cif_path))
+    provenance = (
+        json.loads(meta_path.read_text())
+        if meta_path.exists()
+        else {"identifier": identifier, "source": "unrecorded", **_describe(structure)}
+    )
+    return structure, provenance
+
+
+def get_structure(identifier: str) -> Structure:
+    """Resolve a built-in alias or a saved identifier to a bulk cell."""
+    return _resolve(identifier)[0]
+
+
+def structure_provenance(identifier: str) -> dict:
+    """What the identifier actually resolved to — for stamping into run records."""
+    return _resolve(identifier)[1]

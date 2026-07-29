@@ -241,16 +241,45 @@ def test_pipeline_builds_full_tree_with_fake_backend(tmp_path, monkeypatch):
 # ---- material resolution + batch runner (no conda) --------------------------------------
 
 
-def test_get_structure_resolves_default_and_rejects_unknown():
+def test_get_structure_resolves_alias_and_rejects_unknown():
+    from oxide_workflow.structures import get_structure, structure_provenance
+
+    # the built-in alias resolves offline, and says so
+    assert get_structure("rutile-tio2").composition.reduced_formula == "TiO2"
+    assert structure_provenance("rutile-tio2")["source"] == "builtin"
+    # an unregistered, non-mp identifier fails loudly (names the known set)
+    with pytest.raises(KeyError):
+        get_structure("not-a-material")
+
+
+def test_get_structure_loads_a_local_cif(tmp_path):
+    """The 'upload a CIF' route: point at a file, get a conventional ordered cell."""
+    from oxide_workflow.structures import get_structure, rutile_tio2, structure_provenance
+
+    cif = tmp_path / "my_structure.cif"
+    rutile_tio2().to(filename=str(cif))
+
+    struct = get_structure(str(cif))
+    assert struct.composition.reduced_formula == "TiO2"
+    prov = structure_provenance(str(cif))
+    assert prov["source"] == "file"
+    assert prov["spacegroup"] == "P4_2/mnm"
+
+
+def test_get_structure_rejects_a_disordered_cif(tmp_path):
+    """Partial occupancies fail at resolution, not three stages later in the backend."""
+    from pymatgen.core import Lattice, Structure
+
     from oxide_workflow.structures import get_structure
 
-    # the pinned prototype resolves to the canonical rutile cell
-    struct = get_structure("mp-2657")
-    assert struct.composition.reduced_formula == "TiO2"
-    assert get_structure("rutile-tio2").composition.reduced_formula == "TiO2"
-    # an unregistered id fails loudly (names the known set) rather than silently defaulting
-    with pytest.raises(KeyError):
-        get_structure("mp-does-not-exist")
+    disordered = Structure(
+        Lattice.cubic(4.0), [{"Ti": 0.9, "Nb": 0.1}, {"O": 1.0}], [[0, 0, 0], [0.5, 0.5, 0.5]]
+    )
+    cif = tmp_path / "disordered.cif"
+    disordered.to(filename=str(cif))
+
+    with pytest.raises(ValueError, match="disordered"):
+        get_structure(str(cif))
 
 
 def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
@@ -269,7 +298,7 @@ def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
 
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "batch"
-    materials = ["mp-2657", "mp-fake-2"]
+    materials = ["rutile-tio2", "mp-fake-2"]
     summaries = pipeline.run_batch(materials, cfg, outdir=outdir)
 
     # one browsable subtree per material, each a complete run

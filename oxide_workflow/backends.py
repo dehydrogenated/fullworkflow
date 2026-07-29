@@ -39,7 +39,7 @@ class Backend:
     dtype: str = "float64"
     task: str = "omat"  # fairchem/UMA task head; ignored by other loaders
     head: Optional[str] = None  # MACE multi-head selector (e.g. "omat_pbe"); None = model default
-    fmax: float = 0.05  # eV/Å convergence
+    fmax: float = 0.03  # eV/Å convergence
     max_steps: int = 500
     optimizer: str = "FIRE"
     # capability declaration (design §6)

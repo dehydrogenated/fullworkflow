@@ -1,0 +1,10 @@
+{
+  "identifier": "mp-2657",
+  "source": "materials-project",
+  "calc_type": "r2SCAN Structure Optimization",
+  "mp_database_version": "2026.04.13",
+  "fetched_utc": "2026-07-28T15:44:25+00:00",
+  "formula": "TiO2",
+  "n_sites": 6,
+  "spacegroup": "P4_2/mnm"
+}

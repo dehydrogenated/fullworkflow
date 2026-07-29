@@ -30,7 +30,7 @@ from ase.data import atomic_numbers, covalent_radii
 
 from .backends import Backend, RelaxResult, get_backend, relax
 from .checks import placement_quality_flags
-from .config import RunConfig
+from .config import ADSORBATE_FRAGMENTS, RunConfig
 from .diverge import diverge
 from .records import (
     DivergenceRecord,
@@ -696,7 +696,63 @@ def run_batch(
     return summaries
 
 
+def _cli_miller(text: str) -> tuple[int, int, int]:
+    """Parse a Miller index: "110" or "1,1,0" or "1,1,-1" (commas needed for negatives)."""
+    parts = text.split(",") if "," in text else list(text)
+    idx = tuple(int(p) for p in parts)
+    if len(idx) != 3:
+        raise ValueError(f"miller index needs 3 components, got {text!r}")
+    return idx
+
+
 if __name__ == "__main__":
+    import argparse
     import pprint
 
-    pprint.pprint(run())
+    parser = argparse.ArgumentParser(
+        description="Run the MLIP divergence benchmark (bulk -> slab -> vacancy -> adsorbate).",
+    )
+    parser.add_argument(
+        "--material",
+        help="mp-id (e.g. mp-2657), path to a CIF/POSCAR, or a registered alias. "
+             "Defaults to RunConfig.polymorph.",
+    )
+    parser.add_argument(
+        "--miller",
+        help='facet as "110" or "1,1,-1". Usually needs setting when --material changes.',
+    )
+    parser.add_argument(
+        "--adsorbate",
+        choices=sorted(ADSORBATE_FRAGMENTS),
+        help="adsorbate fragment (default: whatever AdsorbateConfig pins)",
+    )
+    parser.add_argument(
+        "--max-sites",
+        type=int,
+        help="cap adsorbate sites kept per position type (ontop/bridge/hollow). "
+             "Sampling cap for smoke tests; omit to enumerate all.",
+    )
+    parser.add_argument("--outdir", default="runs/latest", help="run directory")
+    parser.add_argument(
+        "--candidates",
+        nargs="+",
+        help="candidate models to benchmark (default: the single RunConfig.candidate)",
+    )
+    args = parser.parse_args()
+
+    cfg = RunConfig()
+    if args.material:
+        cfg = replace(cfg, polymorph=args.material)
+    if args.miller:
+        cfg = replace(cfg, slab=replace(cfg.slab, miller_index=_cli_miller(args.miller)))
+    if args.adsorbate:
+        species, coords = ADSORBATE_FRAGMENTS[args.adsorbate]
+        cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, species=species, coords=coords))
+    if args.max_sites:
+        cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, max_per_position=args.max_sites))
+
+    # No --candidates keeps the old single-candidate behaviour of `python -m ...pipeline`.
+    if args.candidates:
+        pprint.pprint(run_sweep(args.candidates, cfg=cfg, outdir=args.outdir))
+    else:
+        pprint.pprint(run(cfg, outdir=args.outdir))

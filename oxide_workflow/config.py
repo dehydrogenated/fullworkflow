@@ -19,7 +19,7 @@ class SlabConfig:
 
 @dataclass(frozen=True)
 class RelaxConfig:
-    fmax: float = 0.05  # eV/Å
+    fmax: float = 0.03  # eV/Å; water's soft librations need tighter than CO's 0.05
     max_steps: int = 300
     optimizer: str = "FIRE"
 
@@ -39,6 +39,21 @@ class AdsorbateConfig:
     min_normal_height: float = 0.5  # Å floor when the site is further from its atom sideways than the bond length, so there is no vertical solution
     min_clearance: float = 0.8  # reject a placement closer than this x the covalent bond length to any slab atom — the guard against spawning inside a surface atom
     symm_reduce: float = 0.01  # pymatgen: how close (fractional coords) before two sites merge
+    max_per_position: int | None = None  # cap sites kept per position type (None = all); for smoke tests
+
+
+# Named fragments for --adsorbate. First entry is the binding atom and must sit at z=0:
+# pymatgen anchors the lowest-z atom on the site, so ordering sets which end faces the surface.
+ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, float], ...]]] = {
+    "H": (("H",), ((0.0, 0.0, 0.0),)),
+    "CO": (("C", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.128))),  # C-down, gas-phase C-O = 1.128 A
+    # O-down (lone pair to Ti5c); gas-phase r(OH)=0.9572 A, angle 104.52 deg.
+    # H's splay along +-y = [1-10] so they point at the bridging-O rows 3.28 A either side of
+    # the Ti5c. Splaying along x ([001], the row direction) instead leaves the molecule on a
+    # mirror plane where those two rows cancel, and FIRE cannot rotate it off that saddle.
+    "H2O": (("O", "H", "H"), ((0.0, 0.0, 0.0), (0.0, 0.757, 0.5859), (0.0, -0.757, 0.5859))),
+}
+
 
 @dataclass(frozen=True)
 class RunConfig:
@@ -47,4 +62,4 @@ class RunConfig:
     slab: SlabConfig = SlabConfig()
     relax: RelaxConfig = RelaxConfig()
     adsorbate: AdsorbateConfig = AdsorbateConfig()
-    polymorph: str = "mp-2657"  
+    polymorph: str = "rutile-tio2"  # built-in cell, no network. Use "mp-2657" for the real MP entry (needs MP_API_KEY)

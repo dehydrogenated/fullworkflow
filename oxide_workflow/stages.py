@@ -51,8 +51,14 @@ def _placement_z(
     pool: "set[int]",
     adsorbate_symbol: str,
     config: AdsorbateConfig,
-) -> float:
-    """Height (Å) at which to place the adsorbate's binding atom over a site's x,y.
+) -> "tuple[float, int | None]":
+    """(height Å, nearest exposed atom) for the adsorbate's binding atom over a site's x,y.
+
+    The second value is the laterally closest exposed atom — what the site sits *over*.
+    ``_spread_sites`` groups on its element so site selection can tell a Ti-topped site
+    from an O-topped one. It is deliberately not the atom that set the height: Ti's larger
+    covalent radius makes it the height constraint for most sites on rutile(110), including
+    ones directly above a bridging O, so height would not discriminate.
 
     pymatgen returns each site at a flat plane-referenced height; only its x,y is kept and
     the height re-solved here, so placement is species- and lattice-aware. For every exposed
@@ -87,10 +93,10 @@ def _placement_z(
             if solved is None or z > solved:
                 solved = z
     if solved is not None:
-        return float(solved)
+        return float(solved), nearest_i
     if nearest_i is None:
-        return float(coord[2])
-    return float(cart[nearest_i][2] + config.min_normal_height)
+        return float(coord[2]), None
+    return float(cart[nearest_i][2] + config.min_normal_height), nearest_i
 
 
 def exposed_surface_atoms(
@@ -269,6 +275,79 @@ class AdsorbateCandidate:
     site_id: dict  # {symmetry_class(=position type), frac_coord, site_index}
 
 
+_CN_CUTOFF = 2.6  # Å; first cation-anion shell (rutile Ti-O is 1.95-2.00, second shell is >3)
+
+
+def _site_environments(substrate: Structure) -> "dict[int, tuple[str, int]]":
+    """(element, coordination deficit) per atom — the chemical identity of a surface site.
+
+    Deficit is counted against the most-coordinated atom of the same element in the cell,
+    which is bulk-like by construction, so undercoordinated surface atoms score higher
+    without hard-coding any polymorph's bulk coordination numbers. On rutile(110) this
+    separates the reactive Ti5c and bridging O2c from the saturated Ti6c and O3c.
+    """
+    coordination = {
+        i: sum(1 for nb in shell if str(nb.specie) != str(substrate[i].specie))
+        for i, shell in enumerate(substrate.get_all_neighbors(_CN_CUTOFF))
+    }
+    bulk: dict[str, int] = {}
+    for i, c in coordination.items():
+        element = str(substrate[i].specie)
+        bulk[element] = max(bulk.get(element, 0), c)
+    return {
+        i: (str(substrate[i].specie), bulk[str(substrate[i].specie)] - c)
+        for i, c in coordination.items()
+    }
+
+
+def _spread_sites(placed: list, n: int | None, lattice, substrate: Structure) -> list:
+    """Keep ``n`` of the ``(coord, site atom)`` pairs: one per environment, then spread.
+
+    A plain ``[:n]`` slice takes pymatgen's enumeration order, which is spatially
+    correlated: on a 4x2 rutile(110) cell the first three bridge sites land inside a
+    ~1 A patch, so "3 bridge sites" is really one environment sampled three times.
+    Farthest-point sampling fixes the clustering but is blind to chemistry, and that loses
+    the site the run exists to measure: only 3 of 16 ontop sites on the rutile(110) vacancy
+    substrate sit over a 5-fold Ti, so every cap below 6 dropped the canonical adsorption
+    site while keeping four views of the same O-topped environment.
+
+    So seed one site per distinct environment first, most coordinatively unsaturated first
+    — that is where an adsorbate binds, and it puts Ti5c ahead of Ti6c even though pymatgen
+    enumerates a Ti6c site first — then fill the remaining budget by farthest-point spread.
+
+    Deterministic — same input order gives the same subset, so runs stay reproducible.
+    """
+    if n is None or n >= len(placed):
+        return list(placed)
+
+    def _sep(a, b) -> float:
+        """Lateral (ab-plane) min-image distance; z is set later by _placement_z."""
+        f = lattice.get_fractional_coords(np.asarray(a) - np.asarray(b))
+        f[2] = 0.0
+        f -= np.round(f)
+        return float(np.linalg.norm(f @ lattice.matrix))
+
+    environments = _site_environments(substrate)
+
+    def _env(i: int) -> "tuple[str, int]":
+        site_atom = placed[i][1]
+        return environments[site_atom] if site_atom is not None else ("", -1)
+
+    remaining = list(range(len(placed)))  # indices: coords are arrays, so `in`/`remove` break
+    kept: list[int] = []
+    for env in sorted(dict.fromkeys(_env(i) for i in remaining), key=lambda e: -e[1]):
+        if len(kept) == n:
+            break
+        first = next(i for i in remaining if _env(i) == env)
+        remaining.remove(first)
+        kept.append(first)
+    while len(kept) < n and remaining:
+        far = max(remaining, key=lambda i: min(_sep(placed[i][0], placed[k][0]) for k in kept))
+        remaining.remove(far)
+        kept.append(far)
+    return [placed[i] for i in kept]
+
+
 def adsorbate_candidates(
     substrate: Structure, config: AdsorbateConfig, freeze_bottom_fraction: float = 0.0
 ) -> list[AdsorbateCandidate]:
@@ -360,9 +439,13 @@ def adsorbate_candidates(
         positions=list(config.positions),
     )
     for ptype in config.positions:
+        placed = []
         for coord in sites.get(ptype, []):
-            z = _placement_z(substrate, coord, exposed, ads_symbol, config)
-            _add(np.array([coord[0], coord[1], z]), ptype)
+            z, anchor = _placement_z(substrate, coord, exposed, ads_symbol, config)
+            placed.append((np.array([coord[0], coord[1], z]), anchor))
+        # Cap each position type to a spread-out subset (all of them when uncapped).
+        for coord, _anchor in _spread_sites(placed, config.max_per_position, L, substrate):
+            _add(coord, ptype)
 
     if not candidates:
         raise RuntimeError("no adsorption sites found on substrate")
