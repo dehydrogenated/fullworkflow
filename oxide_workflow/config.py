@@ -47,10 +47,6 @@ class AdsorbateConfig:
 ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, float], ...]]] = {
     "H": (("H",), ((0.0, 0.0, 0.0),)),
     "CO": (("C", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.128))),  # C-down, gas-phase C-O = 1.128 A
-    # O-down (lone pair to Ti5c); gas-phase r(OH)=0.9572 A, angle 104.52 deg.
-    # H's splay along +-y = [1-10] so they point at the bridging-O rows 3.28 A either side of
-    # the Ti5c. Splaying along x ([001], the row direction) instead leaves the molecule on a
-    # mirror plane where those two rows cancel, and FIRE cannot rotate it off that saddle.
     "H2O": (("O", "H", "H"), ((0.0, 0.0, 0.0), (0.0, 0.757, 0.5859), (0.0, -0.757, 0.5859))),
 }
 
@@ -58,8 +54,8 @@ ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, 
 @dataclass(frozen=True)
 class RunConfig:
     reference: str = "MACE-mh1-omat"  
-    candidate: str = "UMA-oc22"
+    candidate: str = "MACE-mh1-oc20"
     slab: SlabConfig = SlabConfig()
     relax: RelaxConfig = RelaxConfig()
     adsorbate: AdsorbateConfig = AdsorbateConfig()
-    polymorph: str = "rutile-tio2"  # built-in cell, no network. Use "mp-2657" for the real MP entry (needs MP_API_KEY)
+    polymorph: str = "rutile-tio2"  
