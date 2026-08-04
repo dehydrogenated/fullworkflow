@@ -26,10 +26,10 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_pipeline_produces_both_mode_tables(tmp_path):
-    from oxide_workflow.pipeline import run
+    from oxide_workflow.pipeline import PROTOCOLS, run
 
     cfg = RunConfig(relax=RelaxConfig(fmax=0.1, max_steps=120))
-    summary = run(cfg, outdir=tmp_path)
+    summary = run(cfg, outdir=tmp_path, protocols=PROTOCOLS)
 
     rows = read_divergence_table(tmp_path / "divergence.jsonl")
     protocols = {(r.stage, r.protocol) for r in rows}

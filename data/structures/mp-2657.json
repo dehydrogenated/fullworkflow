@@ -1,9 +1,14 @@
 {
   "identifier": "mp-2657",
   "source": "materials-project",
-  "calc_type": "r2SCAN Structure Optimization",
+  "query": "formula=TiO2 spacegroup_number=136",
+  "energy_above_hull": 0.04363870416666593,
+  "is_stable": false,
+  "theoretical": false,
+  "family": "rutile",
+  "note": "rutile \u2014 the reference case, and what every knob here was tuned on",
   "mp_database_version": "2026.04.13",
-  "fetched_utc": "2026-07-28T15:44:25+00:00",
+  "added_utc": "2026-08-04T20:21:51+00:00",
   "formula": "TiO2",
   "n_sites": 6,
   "spacegroup": "P4_2/mnm"

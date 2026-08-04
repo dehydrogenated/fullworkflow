@@ -124,10 +124,29 @@ def available() -> list[str]:
 
 
 def _resolve(identifier: str) -> tuple[Structure, dict]:
-    """Identifier -> (structure, provenance). Never hits the network."""
+    """Identifier -> (structure, provenance). Never hits the network.
+
+    Resolution order: built-in alias, then a path on disk, then a saved cell in
+    ``STRUCTURE_DIR``. The path branch is what lets you point a run straight at a CIF or
+    POSCAR you built yourself, without going through Materials Project at all.
+    """
     if identifier in STRUCTURE_REGISTRY:
         structure = STRUCTURE_REGISTRY[identifier]()
         return structure, {"identifier": identifier, "source": "builtin", **_describe(structure)}
+
+    # A path to a structure file: normalized through the same guards as a saved cell, so a
+    # hand-supplied CIF cuts the same facet a fetched one would.
+    path = Path(identifier)
+    if path.suffix and path.is_file():
+        structure = Structure.from_file(str(path))
+        _require_ordered(structure, str(path))
+        structure = _conventional(structure)
+        return structure, {
+            "identifier": identifier,
+            "source": "file",
+            "path": str(path.resolve()),
+            **_describe(structure),
+        }
 
     cif_path, meta_path = _structure_paths(identifier)
     if not cif_path.exists():

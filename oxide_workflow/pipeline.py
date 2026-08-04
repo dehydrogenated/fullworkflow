@@ -2,12 +2,14 @@
 
 Runs the pseudo-reference plumbing test: the reference backend generates the full
 relaxed chain (bulk → slab → vacancy → adsorbate) stage by stage; the candidate backend
-then runs the same chain in two modes:
+then runs the same chain under one or both protocols (selected via ``protocols=`` /
+``--protocol``; default ``full_pipeline`` alone):
 
 - **seeded** (per-stage): each stage built from the *reference's* relaxed previous
-  stage → intrinsic per-stage error.
+  stage → intrinsic per-stage error. The protocol for stage-by-stage comparison against
+  a DFT ground truth.
 - **full-pipeline**: each stage built from the *candidate's own* relaxed previous
-  stage → realistic accumulated error.
+  stage → realistic accumulated error. What you get screening with the model alone.
 
 Everything expensive is written to disk immediately. Relaxed geometries land in a
 browsable, VESTA-friendly tree (one folder per model, split by stage; each leaf carries
@@ -21,7 +23,7 @@ and ``summary.json`` — stay at the run root.
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -32,6 +34,7 @@ from .backends import Backend, RelaxResult, get_backend, relax
 from .checks import placement_quality_flags
 from .config import ADSORBATE_FRAGMENTS, RunConfig
 from .diverge import diverge
+from .energetics import GAS_CACHE_DIR, adsorption_energy, gas_reference_energy
 from .records import (
     DivergenceRecord,
     OUTCAR_NAME,
@@ -41,6 +44,7 @@ from .records import (
     relax_subfolder_name,
     stage_dir,
     write_header,
+    write_ranking,
     write_relaxation,
 )
 from .records import _sanitize
@@ -55,6 +59,7 @@ class StageOutput:
     structure: object  # pymatgen Structure
     energy: float
     start_fmax: float
+    e_ads: float | None = None  # adsorbate stage only; None elsewhere
     site_id: dict | None = None
     # --- tree + rollup bookkeeping (populated by _relax_record) ---
     elapsed_s: float = 0.0
@@ -130,6 +135,7 @@ def _relax_header(
     canonical: bool,
     geometry_source: str,
     adsorbate_max_disp: float | None,
+    e_ads: float | None,
     flags: list[str],
 ) -> dict:
     """Leaf-scope header dict: everything the OUTCAR summary block reports (design §5)."""
@@ -151,6 +157,7 @@ def _relax_header(
         "elapsed_s": res.meta.get("elapsed_s"),
         "start_fmax": res.start_fmax,
         "energy": res.energy,
+        "e_ads": e_ads,
         "fmax": res.fmax,
         "geometry_source": geometry_source,
         "adsorbate_max_disp": adsorbate_max_disp,
@@ -170,11 +177,16 @@ def _relax_record(
     relax_cell: bool,
     site_id: dict | None = None,
     canonical: bool = False,
+    e_ads_reference: tuple[float, float] | None = None,
 ) -> StageOutput:
     """Relax one structure and write its leaf folder (POSCAR/CONTCAR/trajectory/OUTCAR).
 
     Returns a StageOutput carrying the relaxed geometry plus the leaf path / header /
     optimizer log so a multi-candidate funnel can flip ``canonical`` on the winner later.
+
+    ``e_ads_reference`` is the ``(bare substrate, isolated fragment)`` energy pair for the
+    adsorbate stage, both from *this* backend; supplying it records E_ads alongside the
+    total energy. Omit it on every other stage, where E_ads is undefined.
     """
     res = relax(
         structure,
@@ -205,13 +217,18 @@ def _relax_record(
         start_ads_distance=start_ads_distance,
         ads_bond_length=ads_bond_length,
     )
+    e_ads = (
+        adsorption_energy(res.energy, *e_ads_reference)
+        if e_ads_reference is not None
+        else None
+    )
     sdir = stage_dir(outdir, backend.name, protocol, stage)
     leaf = leaf_dir(sdir, stage, site_id)
     header = _relax_header(
         res, backend, cfg,
         stage=stage, protocol=protocol, facet=_facet(cfg, stage),
         site_id=site_id, canonical=canonical, geometry_source=geometry_source,
-        adsorbate_max_disp=ads_max_disp, flags=flags,
+        adsorbate_max_disp=ads_max_disp, e_ads=e_ads, flags=flags,
     )
     opt_log = res.meta.get("opt_log", "")
     write_relaxation(
@@ -226,6 +243,7 @@ def _relax_record(
         structure=res.structure,
         energy=res.energy,
         start_fmax=res.start_fmax,
+        e_ads=e_ads,
         site_id=site_id,
         elapsed_s=res.meta.get("elapsed_s") or 0.0,
         model=backend.name,
@@ -241,7 +259,8 @@ def _relax_record(
 
 
 def _record_candidate_energy(
-    path: Path, *, stage: str, model: str, protocol: str, site_id: dict, energy: float
+    path: Path, *, stage: str, model: str, protocol: str, site_id: dict, energy: float,
+    e_ads: float | None = None,
 ) -> None:
     with path.open("a") as f:
         f.write(
@@ -253,10 +272,32 @@ def _record_candidate_energy(
                     "symmetry_class": site_id["symmetry_class"],
                     "site_index": site_id["site_index"],
                     "energy": energy,
+                    # None on the vacancy stage, where E_ads is undefined.
+                    "e_ads": e_ads,
                 }
             )
             + "\n"
         )
+
+
+def _ranking_rows(ranked: list[StageOutput], stage: str) -> list[dict]:
+    """Ranked StageOutputs -> ``rankings.csv`` rows (``ranked`` is sorted, lowest first)."""
+    emin = ranked[0].energy
+    return [
+        {
+            "rank": i,
+            "folder": relax_subfolder_name(stage, o.site_id),
+            "site_index": o.site_id["site_index"],
+            "symmetry_class": o.site_id["symmetry_class"],
+            "energy_eV": round(o.energy, 6),
+            "dE_from_min_eV": round(o.energy - emin, 6),
+            "e_ads_eV": None if o.e_ads is None else round(o.e_ads, 6),
+            "converged": o.header.get("converged"),
+            "nsteps": o.header.get("nsteps"),
+            "flags": "; ".join(o.flags),
+        }
+        for i, o in enumerate(ranked, start=1)
+    ]
 
 
 def _run_funnel(
@@ -269,6 +310,7 @@ def _run_funnel(
     cfg: RunConfig,
     outdir: Path,
     candidates_table: Path,
+    e_ads_reference: tuple[float, float] | None = None,
 ) -> dict[int, StageOutput]:
     """Relax ALL decorate() candidates for one stage → record each. Returns per-site outputs.
 
@@ -278,6 +320,10 @@ def _run_funnel(
     seam — the only per-stage difference lives in the candidate generator. After all sites
     relax, the min-energy one is flagged ``canonical`` (its OUTCAR rewritten) and a
     stage-scope ``header.json`` is written.
+
+    ``e_ads_reference`` (adsorbate stage only) turns on E_ads recording; see
+    ``_relax_record``. Site selection is unaffected by it — E_ads differs from the total
+    energy by a constant within one funnel, so ranking by either picks the same winner.
     """
     outputs: dict[int, StageOutput] = {}
     for cand in candidates:
@@ -292,6 +338,7 @@ def _run_funnel(
             outdir=outdir,
             relax_cell=False,
             site_id=cand.site_id,
+            e_ads_reference=e_ads_reference,
         )
         _record_candidate_energy(
             candidates_table,
@@ -300,6 +347,7 @@ def _run_funnel(
             protocol=protocol,
             site_id=cand.site_id,
             energy=out.energy,
+            e_ads=out.e_ads,
         )
         outputs[si] = out
 
@@ -309,8 +357,15 @@ def _run_funnel(
     winner.header["canonical"] = True
     (winner.leaf / OUTCAR_NAME).write_text(format_outcar(winner.header, winner.opt_log))
 
+    sdir = stage_dir(outdir, backend.name, protocol, stage)
+    ranked = sorted(outputs.values(), key=lambda o: o.energy)
+    write_ranking(sdir, _ranking_rows(ranked, stage))
+    # How decisively this funnel chose. Below the model's own accuracy (tens of meV) the
+    # top sites are degenerate within error and the ordering carries no information.
+    margin = round(ranked[1].energy - ranked[0].energy, 6) if len(ranked) > 1 else None
+
     write_header(
-        stage_dir(outdir, backend.name, protocol, stage),
+        sdir,
         {
             "stage": stage,
             "protocol": protocol,
@@ -318,6 +373,10 @@ def _run_funnel(
             "elapsed_s": round(sum(o.elapsed_s for o in outputs.values()), 3),
             "n_relaxations": len(outputs),
             "canonical": relax_subfolder_name(stage, winner.site_id),
+            # The headline number for the adsorbate stage: the winning site's binding
+            # energy. None on the vacancy stage.
+            "min_e_ads": None if winner.e_ads is None else round(winner.e_ads, 6),
+            "margin_to_runner_up_eV": margin,
         },
     )
     return outputs
@@ -456,12 +515,16 @@ class CandidateChain:
     """One candidate model benchmarked against a shared ReferenceChain."""
 
     outputs: list[StageOutput]
-    fullpipeline_vacancy_site: int
-    fullpipeline_adsorbate_site: int
+    # protocol -> {"vacancy": site_index, "adsorbate": site_index}: the min-energy site each
+    # protocol's own funnel picked. Under ``seeded`` these are the candidate's own picks even
+    # though the divergence rows compare the reference-matched site — the two can disagree,
+    # and that disagreement is the ranking-fidelity signal.
+    sites: dict[str, dict[str, int]] = field(default_factory=dict)
 
 
 def _run_reference_chain(
-    ref: Backend, cfg: RunConfig, outdir: Path, bulk_input, cand_table: Path
+    ref: Backend, cfg: RunConfig, outdir: Path, bulk_input, cand_table: Path,
+    gas_cache: str | Path = GAS_CACHE_DIR,
 ) -> ReferenceChain:
     """Relax the reference chain bulk → slab → vacancy → adsorbate (the ground truth)."""
     outs: list[StageOutput] = []
@@ -479,17 +542,25 @@ def _run_reference_chain(
     outs.append(ref_slab)
 
     ref_vac = _run_funnel(
-        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction), ref, stage="vacancy",
+        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, max_sites=cfg.slab.max_vacancy_sites), ref, stage="vacancy",
         protocol="reference", geometry_source="cut_from_relaxed_slab", cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
     )
     outs.extend(ref_vac.values())
     canonical_site = min(ref_vac, key=lambda si: ref_vac[si].energy)  # min-energy vacancy
 
+    # E_ads reference state, both terms from the reference backend: the bare substrate is
+    # the relaxed vacancy slab the fragment is about to be placed on (already relaxed by
+    # the funnel above, so it costs nothing), and the gas term is the isolated fragment.
+    ref_e_ads = (
+        ref_vac[canonical_site].energy,
+        gas_reference_energy(ref, cfg, relax, cachedir=gas_cache),
+    )
+
     ref_ads = _run_funnel(
         adsorbate_candidates(ref_vac[canonical_site].structure, cfg.adsorbate, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction), ref, stage="adsorbate",
         protocol="reference", geometry_source="placed_on_relaxed_vacancy", cfg=cfg,
-        outdir=outdir, candidates_table=cand_table,
+        outdir=outdir, candidates_table=cand_table, e_ads_reference=ref_e_ads,
     )
     outs.extend(ref_ads.values())
     ads_canonical = min(ref_ads, key=lambda si: ref_ads[si].energy)  # min-energy placement
@@ -501,88 +572,162 @@ def _run_reference_chain(
     )
 
 
+# The two benchmarking protocols, in run order. They differ only in *which* relaxed
+# geometry feeds each stage:
+#
+# - ``seeded``        - each stage built from the REFERENCE's relaxed previous stage.
+#                       Isolates the intrinsic per-stage error, because the candidate never
+#                       inherits its own upstream mistakes. This is the protocol for
+#                       stage-by-stage comparison against a DFT ground truth.
+# - ``full_pipeline`` - each stage built from the CANDIDATE's OWN relaxed previous stage.
+#                       The realistic accumulated error: what you actually get screening
+#                       with this model alone, with no reference to lean on.
+PROTOCOLS = ("seeded", "full_pipeline")
+
+_GEOMETRY_SOURCES = {
+    "seeded": {
+        "slab": "cut_from_reference_bulk",
+        "vacancy": "reference_slab",
+        "adsorbate": "placed_on_reference_vacancy",
+    },
+    "full_pipeline": {
+        "slab": "cut_from_candidate_bulk",
+        "vacancy": "candidate_slab",
+        "adsorbate": "placed_on_candidate_vacancy",
+    },
+}
+
+
+def _run_protocol_chain(
+    cand: Backend, rc: ReferenceChain, cfg: RunConfig, outdir: Path,
+    div_table: Path, cand_table: Path, *, protocol: str, cand_bulk: StageOutput,
+    e_gas: float,
+) -> tuple[list[StageOutput], dict[str, int]]:
+    """Run ONE protocol's slab -> vacancy -> adsorbate chain for one candidate.
+
+    The protocols are structurally identical; they differ in exactly two ways, both
+    parameterized here rather than by duplicating the chain:
+
+    1. **Which substrate** each stage is built on - the reference's relaxed output
+       (``seeded``) or the candidate's own (``full_pipeline``).
+    2. **Which site the divergence row compares.** ``seeded`` compares the candidate's
+       relaxation of the *same* site the reference picked, because per-stage attribution
+       only means something when both sides are the same physical configuration.
+       ``full_pipeline`` compares the candidate's *own* min-energy pick against the
+       reference's, so a ranking disagreement shows up as a large divergence - which is
+       exactly what that protocol exists to measure.
+
+    Returns ``(relaxation outputs, {"vacancy": site_index, "adsorbate": site_index})``,
+    where the site indices are always this protocol's own min-energy picks.
+    """
+    seeded = protocol == "seeded"
+    src = _GEOMETRY_SOURCES[protocol]
+    frozen = cfg.slab.freeze_bottom_fraction
+    outs: list[StageOutput] = []
+
+    # ---- slab ------------------------------------------------------------------------
+    slab_substrate = rc.bulk.structure if seeded else cand_bulk.structure
+    c_slab = _relax_record(
+        make_slab(slab_substrate, cfg.slab), cand, stage="slab", protocol=protocol,
+        geometry_source=src["slab"], cfg=cfg, outdir=outdir, relax_cell=False, canonical=True,
+    )
+    outs.append(c_slab)
+    _emit(div_table, rc.slab, c_slab, stage="slab", model=cand.name, protocol=protocol, cfg=cfg)
+
+    # ---- vacancy funnel --------------------------------------------------------------
+    vac_substrate = rc.slab.structure if seeded else c_slab.structure
+    c_vac = _run_funnel(
+        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites), cand,
+        stage="vacancy", protocol=protocol, geometry_source=src["vacancy"], cfg=cfg,
+        outdir=outdir, candidates_table=cand_table,
+    )
+    outs.extend(c_vac.values())
+    own_vac = min(c_vac, key=lambda si: c_vac[si].energy)  # this protocol's own min
+    emit_vac = rc.canonical_site if seeded else own_vac
+    if emit_vac in c_vac:  # a seeded match can be absent if enumeration diverged
+        _emit(div_table, rc.vacancy, c_vac[emit_vac], stage="vacancy",
+              model=cand.name, protocol=protocol, cfg=cfg)
+
+    # ---- E_ads reference state (both terms from THIS backend) ------------------------
+    # E_ads only cancels the model's per-atom energy offset if all three terms come from
+    # the same calculator, so the bare-substrate term must be *this* model's energy for
+    # the exact substrate the fragment sits on.
+    #
+    # full_pipeline places on this model's own relaxed vacancy, so that energy is already
+    # in hand and the reference state is free. seeded places on the REFERENCE model's
+    # relaxed vacancy — a geometry this model has never evaluated — so relax it once here.
+    # That is one extra slab relaxation per candidate, against one per site in the funnel
+    # below; using the reference's own energy instead would mix calculators and leave the
+    # ~tens-of-eV offset uncancelled, swamping the binding energy entirely.
+    ads_substrate = rc.vacancy.structure if seeded else c_vac[own_vac].structure
+    if seeded:
+        bare = _relax_record(
+            ads_substrate, cand, stage="bare_substrate", protocol=protocol,
+            geometry_source="reference_vacancy", cfg=cfg, outdir=outdir,
+            relax_cell=False, canonical=True,
+        )
+        outs.append(bare)
+        e_substrate = bare.energy
+    else:
+        e_substrate = c_vac[own_vac].energy
+
+    # ---- adsorbate funnel ------------------------------------------------------------
+    c_ads = _run_funnel(
+        adsorbate_candidates(ads_substrate, cfg.adsorbate, freeze_bottom_fraction=frozen), cand,
+        stage="adsorbate", protocol=protocol, geometry_source=src["adsorbate"], cfg=cfg,
+        outdir=outdir, candidates_table=cand_table,
+        e_ads_reference=(e_substrate, e_gas),
+    )
+    outs.extend(c_ads.values())
+    own_ads = min(c_ads, key=lambda si: c_ads[si].energy)
+    emit_ads = rc.ads_canonical if seeded else own_ads
+    if emit_ads in c_ads:
+        _emit(div_table, rc.adsorbate, c_ads[emit_ads], stage="adsorbate",
+              model=cand.name, protocol=protocol, cfg=cfg)
+
+    return outs, {"vacancy": own_vac, "adsorbate": own_ads}
+
+
 def _run_candidate_chain(
     cand: Backend, rc: ReferenceChain, cfg: RunConfig, outdir: Path,
-    div_table: Path, cand_table: Path,
+    div_table: Path, cand_table: Path, protocols: tuple[str, ...] = PROTOCOLS,
+    gas_cache: str | Path = GAS_CACHE_DIR,
 ) -> CandidateChain:
-    """Run one candidate's seeded + full-pipeline chains against the shared reference.
+    """Run one candidate's requested protocol chains against the shared reference.
 
     Everything is keyed off ``cand`` (its name is the tree folder + divergence ``model``),
-    so N candidates coexist under one run dir with one shared reference subtree.
+    so N candidates coexist under one run dir with one shared reference subtree. The bulk
+    relaxation is shared by every protocol - they all warm-start from the same database
+    cell - so it runs once no matter how many protocols are requested.
     """
     outs: list[StageOutput] = []
 
-    # ---- Candidate: bulk (shared warm start; seeded == full-pipeline here) ------------
+    # ---- Candidate: bulk (shared warm start; identical under every protocol) ----------
+    # Labelled with the first requested protocol purely so the divergence row has one; the
+    # tree puts it at <model>/bulk with no protocol level either way.
+    bulk_protocol = protocols[0]
     cand_bulk = _relax_record(
-        rc.bulk_input, cand, stage="bulk", protocol="seeded",
+        rc.bulk_input, cand, stage="bulk", protocol=bulk_protocol,
         geometry_source="db", cfg=cfg, outdir=outdir, relax_cell=True, canonical=True,
     )
     outs.append(cand_bulk)
-    _emit(div_table, rc.bulk, cand_bulk, stage="bulk", model=cand.name, protocol="seeded", cfg=cfg)
+    _emit(div_table, rc.bulk, cand_bulk, stage="bulk", model=cand.name,
+          protocol=bulk_protocol, cfg=cfg)
 
-    # ---- Candidate: SEEDED (each stage from the reference's relaxed previous stage) ---
-    cs_slab = _relax_record(
-        make_slab(rc.bulk.structure, cfg.slab), cand, stage="slab", protocol="seeded",
-        geometry_source="cut_from_reference_bulk", cfg=cfg, outdir=outdir, relax_cell=False, canonical=True,
-    )
-    outs.append(cs_slab)
-    _emit(div_table, rc.slab, cs_slab, stage="slab", model=cand.name, protocol="seeded", cfg=cfg)
+    # This model's own isolated-fragment energy — shared by every protocol, and cached
+    # across runs, so it is computed at most once per (model, fragment, fmax).
+    e_gas = gas_reference_energy(cand, cfg, relax, cachedir=gas_cache)
 
-    cs_vac = _run_funnel(
-        oxygen_vacancy_candidates(rc.slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction), cand, stage="vacancy",
-        protocol="seeded", geometry_source="reference_slab", cfg=cfg, outdir=outdir,
-        candidates_table=cand_table,
-    )
-    outs.extend(cs_vac.values())
-    # Per-stage attribution: compare the candidate's relaxation of the SAME site.
-    if rc.canonical_site in cs_vac:
-        _emit(div_table, rc.vacancy, cs_vac[rc.canonical_site], stage="vacancy",
-              model=cand.name, protocol="seeded", cfg=cfg)
+    sites: dict[str, dict[str, int]] = {}
+    for protocol in protocols:
+        chain_outs, chain_sites = _run_protocol_chain(
+            cand, rc, cfg, outdir, div_table, cand_table,
+            protocol=protocol, cand_bulk=cand_bulk, e_gas=e_gas,
+        )
+        outs.extend(chain_outs)
+        sites[protocol] = chain_sites
 
-    # Adsorbate seeded: placed on the *reference's* relaxed vacancy substrate.
-    cs_ads = _run_funnel(
-        adsorbate_candidates(rc.vacancy.structure, cfg.adsorbate, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction), cand, stage="adsorbate",
-        protocol="seeded", geometry_source="placed_on_reference_vacancy", cfg=cfg,
-        outdir=outdir, candidates_table=cand_table,
-    )
-    outs.extend(cs_ads.values())
-    if rc.ads_canonical in cs_ads:
-        _emit(div_table, rc.adsorbate, cs_ads[rc.ads_canonical], stage="adsorbate",
-              model=cand.name, protocol="seeded", cfg=cfg)
-
-    # ---- Candidate: FULL-PIPELINE (each stage from candidate's own previous stage) ----
-    cf_slab = _relax_record(
-        make_slab(cand_bulk.structure, cfg.slab), cand, stage="slab", protocol="full_pipeline",
-        geometry_source="cut_from_candidate_bulk", cfg=cfg, outdir=outdir, relax_cell=False, canonical=True,
-    )
-    outs.append(cf_slab)
-    _emit(div_table, rc.slab, cf_slab, stage="slab", model=cand.name, protocol="full_pipeline", cfg=cfg)
-
-    cf_vac = _run_funnel(
-        oxygen_vacancy_candidates(cf_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction), cand, stage="vacancy",
-        protocol="full_pipeline", geometry_source="candidate_slab", cfg=cfg, outdir=outdir,
-        candidates_table=cand_table,
-    )
-    outs.extend(cf_vac.values())
-    cf_site = min(cf_vac, key=lambda si: cf_vac[si].energy)  # candidate's own min
-    _emit(div_table, rc.vacancy, cf_vac[cf_site], stage="vacancy", model=cand.name,
-          protocol="full_pipeline", cfg=cfg)
-
-    # Adsorbate full-pipeline: placed on the *candidate's own* min-energy vacancy substrate.
-    cf_ads = _run_funnel(
-        adsorbate_candidates(cf_vac[cf_site].structure, cfg.adsorbate, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction), cand,
-        stage="adsorbate", protocol="full_pipeline",
-        geometry_source="placed_on_candidate_vacancy", cfg=cfg, outdir=outdir,
-        candidates_table=cand_table,
-    )
-    outs.extend(cf_ads.values())
-    cf_ads_site = min(cf_ads, key=lambda si: cf_ads[si].energy)  # candidate's own min
-    _emit(div_table, rc.adsorbate, cf_ads[cf_ads_site], stage="adsorbate",
-          model=cand.name, protocol="full_pipeline", cfg=cfg)
-
-    return CandidateChain(
-        outputs=outs, fullpipeline_vacancy_site=cf_site, fullpipeline_adsorbate_site=cf_ads_site,
-    )
+    return CandidateChain(outputs=outs, sites=sites)
 
 
 def _fresh_tables(outdir: Path) -> tuple[Path, Path]:
@@ -596,16 +741,66 @@ def _fresh_tables(outdir: Path) -> tuple[Path, Path]:
     return div_table, cand_table
 
 
-def run(cfg: RunConfig | None = None, outdir: str | Path = "runs/latest") -> dict:
+def _fragment_label(acfg) -> str:
+    """The ``ADSORBATE_FRAGMENTS`` key for this fragment, else a counted formula.
+
+    Reverse lookup rather than a stored field, so the label is exactly what you would pass
+    back to ``--adsorbate``. The fallback is hand-rolled because pymatgen's
+    ``reduced_formula`` special-cases diatomic gases — it renders a single H atom as "H2",
+    which would silently mislabel every atomic-adsorbate run.
+    """
+    want = (tuple(acfg.species), tuple(tuple(c) for c in acfg.coords))
+    for name, (species, coords) in ADSORBATE_FRAGMENTS.items():
+        if want == (tuple(species), tuple(tuple(c) for c in coords)):
+            return name
+    counts = Counter(acfg.species)
+    return "".join(s if n == 1 else f"{s}{n}" for s, n in counts.items())
+
+
+def _min_e_ads(outs: list[StageOutput]) -> dict[str, float]:
+    """protocol -> the lowest (most strongly bound) E_ads found on the adsorbate stage.
+
+    The headline result of a run: the minimum adsorption energy over all sampled sites.
+    """
+    best: dict[str, float] = {}
+    for o in outs:
+        if o.stage != "adsorbate" or o.e_ads is None:
+            continue
+        if o.protocol not in best or o.e_ads < best[o.protocol]:
+            best[o.protocol] = round(o.e_ads, 6)
+    return best
+
+
+def _check_protocols(protocols) -> tuple[str, ...]:
+    """Normalize a protocol selection to run order, rejecting unknown names."""
+    requested = tuple(protocols)
+    unknown = [p for p in requested if p not in PROTOCOLS]
+    if unknown:
+        raise ValueError(f"unknown protocol(s) {unknown}; choose from {list(PROTOCOLS)}")
+    if not requested:
+        raise ValueError(f"need at least one protocol; choose from {list(PROTOCOLS)}")
+    return tuple(p for p in PROTOCOLS if p in requested)  # canonical order, deduplicated
+
+
+def run(
+    cfg: RunConfig | None = None,
+    outdir: str | Path = "runs/latest",
+    protocols: tuple[str, ...] = ("full_pipeline",),
+    gas_cache: str | Path = GAS_CACHE_DIR,
+) -> dict:
     """Benchmark a single candidate against the reference (thin wrapper over ``run_sweep``)."""
     cfg = cfg or RunConfig()
-    return run_sweep([cfg.candidate], cfg=cfg, outdir=outdir)
+    return run_sweep(
+        [cfg.candidate], cfg=cfg, outdir=outdir, protocols=protocols, gas_cache=gas_cache
+    )
 
 
 def run_sweep(
     candidates: list[str] | tuple[str, ...] | None = None,
     cfg: RunConfig | None = None,
     outdir: str | Path = "runs/latest",
+    protocols: tuple[str, ...] = ("full_pipeline",),
+    gas_cache: str | Path = GAS_CACHE_DIR,
 ) -> dict:
     """Benchmark many candidates against ONE shared reference chain.
 
@@ -615,10 +810,16 @@ def run_sweep(
     candidate lands in its own ``<outdir>/<candidate>/`` subtree beside the single
     reference subtree, and its divergence rows share the run-root ``divergence.jsonl``
     keyed by model — so the reference is never recomputed per candidate.
+
+    ``protocols`` selects which chains each candidate runs (see ``PROTOCOLS``). The
+    default is ``full_pipeline`` alone — the realistic accumulated-error number, and half
+    the cost of running both. Pass ``PROTOCOLS`` for per-stage attribution as well; the
+    reference chain is shared either way, so adding ``seeded`` only costs candidate time.
     """
     from .backends import ALL_CANDIDATES
 
     cfg = cfg or RunConfig()
+    protocols = _check_protocols(protocols)
     candidates = list(candidates if candidates is not None else ALL_CANDIDATES)
     outdir = Path(outdir)
     div_table, cand_table = _fresh_tables(outdir)
@@ -626,17 +827,16 @@ def run_sweep(
     ref = get_backend(cfg.reference)
     bulk_input = get_structure(cfg.polymorph)  # mp-id / alias → warm-start bulk cell
 
-    rc = _run_reference_chain(ref, cfg, outdir, bulk_input, cand_table)
+    rc = _run_reference_chain(ref, cfg, outdir, bulk_input, cand_table, gas_cache)
     all_outs: list[StageOutput] = list(rc.outputs)
 
     per_candidate: dict[str, dict] = {}
     for name in candidates:
-        cc = _run_candidate_chain(get_backend(name), rc, cfg, outdir, div_table, cand_table)
+        cc = _run_candidate_chain(
+            get_backend(name), rc, cfg, outdir, div_table, cand_table, protocols, gas_cache
+        )
         all_outs.extend(cc.outputs)
-        per_candidate[name] = {
-            "fullpipeline_vacancy_site": cc.fullpipeline_vacancy_site,
-            "fullpipeline_adsorbate_site": cc.fullpipeline_adsorbate_site,
-        }
+        per_candidate[name] = {"sites": cc.sites, "min_e_ads": _min_e_ads(cc.outputs)}
 
     # ---- Header rollups over the whole tree (timing, canonical pointers) --------------
     total_elapsed_s = _write_tree_headers(outdir, cfg, all_outs)
@@ -644,10 +844,14 @@ def run_sweep(
     summary = {
         "reference": cfg.reference,
         "candidates": candidates,
+        "protocols": list(protocols),
         "facet": "".join(map(str, cfg.slab.miller_index)),
         "polymorph": cfg.polymorph,
         "reference_canonical_vacancy_site": rc.canonical_site,
         "reference_canonical_adsorbate_site": rc.ads_canonical,
+        "adsorbate": _fragment_label(cfg.adsorbate),
+        # The headline result: lowest E_ads over all sampled sites (eV, negative = bound).
+        "reference_min_e_ads": _min_e_ads(rc.outputs).get("reference"),
         "n_vacancy_sites": len(rc.vac),
         "n_adsorbate_sites": len(rc.ads),
         "per_candidate": per_candidate,
@@ -663,6 +867,10 @@ def run_batch(
     materials: list[str] | tuple[str, ...],
     cfg: RunConfig | None = None,
     outdir: str | Path = "runs/latest",
+    protocols: tuple[str, ...] = ("full_pipeline",),
+    gas_cache: str | Path = GAS_CACHE_DIR,
+    resume: bool = True,
+    continue_on_error: bool = True,
 ) -> dict[str, dict]:
     """Run the full benchmark for several materials, one browsable subtree each.
 
@@ -675,22 +883,51 @@ def run_batch(
     Returns ``{identifier: summary}``. A single-element list reproduces ``run`` exactly,
     just nested one level deeper — so the current single-rutile default is unchanged when
     called as ``run(...)`` directly.
+
+    A family sweep runs for days, so it is restartable by default: ``resume`` skips any
+    material that already has a ``summary.json``, and ``continue_on_error`` records a
+    failing material in ``batch.json`` and moves on instead of discarding the sweep. Rerun
+    the same command to retry only what failed.
     """
     cfg = cfg or RunConfig()
     outdir = Path(outdir)
     outdir.mkdir(parents=True, exist_ok=True)
 
     summaries: dict[str, dict] = {}
+    failures: dict[str, str] = {}
     for material in materials:
         sub = outdir / _sanitize(material)
-        summaries[material] = run(replace(cfg, polymorph=material), outdir=sub)
+        done = sub / "summary.json"
+        if resume and done.exists():
+            # A finished material is expensive (hours) and immutable — never redo it.
+            summaries[material] = json.loads(done.read_text())
+            print(f"[batch] {material}: already complete, skipping", flush=True)
+            continue
+        try:
+            # gas_cache is deliberately NOT per-material: the isolated fragment is the same
+            # reference state for every material, so one cached number serves the batch.
+            summaries[material] = run(
+                replace(cfg, polymorph=material), outdir=sub, protocols=protocols,
+                gas_cache=gas_cache,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # One bad material must not cost the whole sweep. Record why and continue; the
+            # batch index lists failures so a rerun (resume=True) retries only those.
+            if not continue_on_error:
+                raise
+            failures[material] = f"{type(exc).__name__}: {exc}"
+            print(f"[batch] {material} FAILED: {failures[material]}", flush=True)
 
     index = {
         "materials": list(materials),
         "reference": cfg.reference,
         "candidate": cfg.candidate,
+        "protocols": list(_check_protocols(protocols)),
+        "adsorbate": _fragment_label(cfg.adsorbate),
+        "completed": sorted(summaries),
+        "failed": failures,
         "total_elapsed_s": round(sum(s["total_elapsed_s"] for s in summaries.values()), 3),
-        "runs": {m: _sanitize(m) for m in materials},
+        "runs": {m: _sanitize(m) for m in summaries},
     }
     (outdir / "batch.json").write_text(json.dumps(index, indent=2))
     return summaries
@@ -732,13 +969,63 @@ if __name__ == "__main__":
         help="cap adsorbate sites kept per position type (ontop/bridge/hollow). "
              "Sampling cap for smoke tests; omit to enumerate all.",
     )
+    _slab = RunConfig().slab
+    parser.add_argument(
+        "--termination", type=int,
+        help=f"which termination of the facet (default {_slab.termination_index}). "
+             "Run scripts/validate_materials.py to see what each index actually is.",
+    )
+    parser.add_argument(
+        "--thickness", type=float, metavar="A",
+        help=f"min slab thickness in A (default {_slab.min_slab_size}) — the layer-count knob",
+    )
+    parser.add_argument(
+        "--vacuum", type=float, metavar="A",
+        help=f"min vacuum gap in A (default {_slab.min_vacuum_size})",
+    )
+    parser.add_argument(
+        "--freeze", type=float, metavar="FRAC",
+        help=f"fraction of slab thickness held at bulk positions, 0-1 "
+             f"(default {_slab.freeze_bottom_fraction})",
+    )
+    parser.add_argument(
+        "--supercell", metavar="NX,NY",
+        help=f"lateral slab replication (default {_slab.supercell[0]},{_slab.supercell[1]}). "
+             "The dominant cost knob: 4,2 is 192 atoms, 1,1 is 24.",
+    )
+    parser.add_argument(
+        "--max-vacancy-sites", type=int,
+        help="cap the vacancy funnel (default: all symmetry-distinct O sites). Smoke-test "
+             "knob — keeps the first N by site index, so it can drop the true minimum.",
+    )
+    parser.add_argument(
+        "--fmax", type=float,
+        help=f"force convergence, eV/A (default {RunConfig().relax.fmax}). Loosen to ~0.1 "
+             "for a smoke test; it is the biggest single speed lever.",
+    )
+    parser.add_argument(
+        "--max-steps", type=int,
+        help=f"optimizer step cap per relaxation (default {RunConfig().relax.max_steps})",
+    )
     parser.add_argument("--outdir", default="runs/latest", help="run directory")
     parser.add_argument(
         "--candidates",
         nargs="+",
         help="candidate models to benchmark (default: the single RunConfig.candidate)",
     )
+    parser.add_argument(
+        "--protocol",
+        choices=("full_pipeline", "seeded", "both"),
+        default="full_pipeline",
+        help="which candidate chain(s) to run. full_pipeline (default): each stage from "
+             "the candidate's own relaxed previous stage - realistic accumulated error. "
+             "seeded: each stage from the reference's - intrinsic per-stage error, for "
+             "stage-by-stage comparison against a DFT ground truth. both: run each, at "
+             "roughly double the candidate cost (the reference chain is shared).",
+    )
     args = parser.parse_args()
+
+    protocols = PROTOCOLS if args.protocol == "both" else (args.protocol,)
 
     cfg = RunConfig()
     if args.material:
@@ -750,9 +1037,29 @@ if __name__ == "__main__":
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, species=species, coords=coords))
     if args.max_sites:
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, max_per_position=args.max_sites))
+    if args.max_vacancy_sites:
+        cfg = replace(cfg, slab=replace(cfg.slab, max_vacancy_sites=args.max_vacancy_sites))
+    slab_over = {}
+    if args.termination is not None:
+        slab_over["termination_index"] = args.termination
+    if args.thickness is not None:
+        slab_over["min_slab_size"] = args.thickness
+    if args.vacuum is not None:
+        slab_over["min_vacuum_size"] = args.vacuum
+    if args.freeze is not None:
+        slab_over["freeze_bottom_fraction"] = args.freeze
+    if args.supercell:
+        nx, ny = (int(v) for v in args.supercell.split(","))
+        slab_over["supercell"] = (nx, ny)
+    if slab_over:
+        cfg = replace(cfg, slab=replace(cfg.slab, **slab_over))
+    if args.fmax is not None:
+        cfg = replace(cfg, relax=replace(cfg.relax, fmax=args.fmax))
+    if args.max_steps is not None:
+        cfg = replace(cfg, relax=replace(cfg.relax, max_steps=args.max_steps))
 
     # No --candidates keeps the old single-candidate behaviour of `python -m ...pipeline`.
     if args.candidates:
-        pprint.pprint(run_sweep(args.candidates, cfg=cfg, outdir=args.outdir))
+        pprint.pprint(run_sweep(args.candidates, cfg=cfg, outdir=args.outdir, protocols=protocols))
     else:
-        pprint.pprint(run(cfg, outdir=args.outdir))
+        pprint.pprint(run(cfg, outdir=args.outdir, protocols=protocols))

@@ -181,7 +181,10 @@ def test_pipeline_builds_full_tree_with_fake_backend(tmp_path, monkeypatch):
     # Small slab keeps the pymatgen symmetry/adsorption work fast; relax is faked anyway.
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "run1"
-    summary = pipeline.run(cfg, outdir=outdir)
+    # Both protocols: this test pins the *full* tree layout, protocol level included.
+    summary = pipeline.run(
+        cfg, outdir=outdir, protocols=pipeline.PROTOCOLS, gas_cache=tmp_path / "gas"
+    )
 
     # --- top-level tree ---
     assert (outdir / "header.json").exists()
@@ -299,7 +302,9 @@ def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "batch"
     materials = ["rutile-tio2", "mp-fake-2"]
-    summaries = pipeline.run_batch(materials, cfg, outdir=outdir)
+    summaries = pipeline.run_batch(
+        materials, cfg, outdir=outdir, gas_cache=tmp_path / "gas"
+    )
 
     # one browsable subtree per material, each a complete run
     assert set(summaries) == set(materials)
@@ -340,7 +345,10 @@ def test_run_sweep_shares_one_reference_across_candidates(tmp_path, monkeypatch)
     outdir = tmp_path / "sweep"
     # a MACE head + a UMA task as candidates against the single mh1-omat reference
     candidates = ["UMA-oc22", "MACE-mh1-mp"]
-    summary = pipeline.run_sweep(candidates, cfg, outdir=outdir)
+    summary = pipeline.run_sweep(
+        candidates, cfg, outdir=outdir, protocols=pipeline.PROTOCOLS,
+        gas_cache=tmp_path / "gas",
+    )
 
     # ONE reference subtree (stages directly, no protocol level) — shared, not recomputed
     ref = outdir / cfg.reference
@@ -370,3 +378,203 @@ def test_run_sweep_shares_one_reference_across_candidates(tmp_path, monkeypatch)
     assert run_header["models"][0] == cfg.reference
     assert set(summary["per_candidate"]) == set(candidates)
     assert set(run_header["elapsed_by_model"]) == {cfg.reference, *candidates}
+
+
+@pytest.mark.parametrize("protocol", ["full_pipeline", "seeded"])
+def test_protocol_flag_runs_only_the_requested_chain(tmp_path, monkeypatch, protocol):
+    """A single-protocol run builds only that protocol's subtree and divergence rows.
+
+    The reference chain is unconditional (it is the baseline both protocols compare to),
+    so restricting the protocol must shrink the *candidate* subtree and nothing else.
+    """
+    import json
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir = tmp_path / protocol
+    summary = pipeline.run_sweep(
+        ["UMA-oc22"], cfg, outdir=outdir, protocols=(protocol,), gas_cache=tmp_path / "gas"
+    )
+
+    other = next(p for p in pipeline.PROTOCOLS if p != protocol)
+    sub = outdir / "UMA-oc22"
+    assert (sub / "bulk" / "OUTCAR").exists()  # shared warm start, always present
+    assert (sub / protocol / "slab" / "OUTCAR").exists()
+    assert not (sub / other).exists()  # the unrequested chain never ran
+
+    # The reference subtree is unaffected by the protocol choice.
+    assert (outdir / cfg.reference / "adsorbate").is_dir()
+
+    rows = [
+        json.loads(ln)
+        for ln in (outdir / "divergence.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    assert {r["protocol"] for r in rows} == {protocol}
+    assert summary["protocols"] == [protocol]
+    assert set(summary["per_candidate"]["UMA-oc22"]["sites"]) == {protocol}
+
+
+def test_unknown_protocol_is_rejected():
+    from oxide_workflow import pipeline
+
+    with pytest.raises(ValueError, match="unknown protocol"):
+        pipeline._check_protocols(("full_pipeline", "typo"))
+    with pytest.raises(ValueError, match="at least one protocol"):
+        pipeline._check_protocols(())
+
+
+# ---- adsorption energy ------------------------------------------------------------------
+
+
+def test_adsorption_energy_arithmetic_and_missing_terms():
+    from oxide_workflow.energetics import adsorption_energy
+
+    # E_ads = E(slab+ads) - E(bare slab) - E(gas); negative = bound.
+    assert adsorption_energy(-100.0, -95.0, -1.5) == pytest.approx(-3.5)
+    # Any missing term yields None rather than a silently wrong number.
+    assert adsorption_energy(None, -95.0, -1.5) is None
+    assert adsorption_energy(-100.0, None, -1.5) is None
+    assert adsorption_energy(-100.0, -95.0, None) is None
+
+
+def test_fragment_key_separates_same_formula_different_geometry():
+    from oxide_workflow.energetics import fragment_key
+
+    o2 = fragment_key(("O", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.208)))
+    far = fragment_key(("O", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 6.0)))
+    assert o2 != far  # different reference states must not share a cache entry
+    assert o2.startswith("OO_")
+
+
+def test_gas_reference_energy_is_cached_and_keyed_by_fmax(tmp_path, monkeypatch):
+    """The gas reference is computed once per (model, fragment, fmax) and reused."""
+    from dataclasses import replace
+
+    from oxide_workflow.backends import get_backend
+    from oxide_workflow.config import RelaxConfig, RunConfig
+    from oxide_workflow.energetics import gas_reference_energy
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    calls = []
+
+    def counting_relax(structure, backend, **kw):
+        calls.append(backend.name)
+        return _fake_relax(structure, backend, **kw)
+
+    cfg = RunConfig(relax=RelaxConfig(fmax=0.02))
+    backend = get_backend("MACE-mh1-omat")
+
+    first = gas_reference_energy(backend, cfg, counting_relax, cachedir=tmp_path)
+    second = gas_reference_energy(backend, cfg, counting_relax, cachedir=tmp_path)
+    assert first == second
+    assert len(calls) == 1  # second call served from disk, no relaxation
+
+    # A tighter fmax is a different reference state — it must NOT reuse the loose one.
+    tighter = replace(cfg, relax=RelaxConfig(fmax=0.001))
+    gas_reference_energy(backend, tighter, counting_relax, cachedir=tmp_path)
+    assert len(calls) == 2
+
+
+def test_e_ads_recorded_per_site_and_uses_one_calculator(tmp_path, monkeypatch):
+    """Every adsorbate row carries E_ads; vacancy rows carry none.
+
+    Also pins the same-calculator rule: each model's E_ads must be built from its own
+    substrate and gas energies, so the fake backend's per-model energies produce a value
+    consistent with that model's own recorded totals.
+    """
+    import json
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir = tmp_path / "eads"
+    summary = pipeline.run(cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+
+    rows = [
+        json.loads(ln)
+        for ln in (outdir / "candidates.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    ads = [r for r in rows if r["stage"] == "adsorbate"]
+    vac = [r for r in rows if r["stage"] == "vacancy"]
+    assert ads and all(r["e_ads"] is not None for r in ads)
+    assert vac and all(r["e_ads"] is None for r in vac)  # undefined on the vacancy stage
+
+    # The headline number equals the minimum over the reference's own adsorbate rows.
+    ref_ads = [r for r in ads if r["protocol"] == "reference"]
+    assert summary["reference_min_e_ads"] == pytest.approx(
+        min(r["e_ads"] for r in ref_ads), abs=1e-6
+    )
+    assert summary["adsorbate"] == "".join(cfg.adsorbate.species)
+
+    # E_ads reaches the leaf OUTCAR too.
+    outcars = list((outdir / cfg.reference / "adsorbate").rglob("OUTCAR"))
+    assert outcars and any("E_ads (eV):" in p.read_text() for p in outcars)
+
+
+def test_stage_rankings_file(tmp_path, monkeypatch):
+    """Each funnel stage gets a rankings.csv ordering its sites, best first."""
+    import csv
+    import json
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir = tmp_path / "rank"
+    pipeline.run(cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+
+    for stage in ("vacancy", "adsorbate"):
+        sdir = outdir / cfg.reference / stage
+        rows = list(csv.DictReader((sdir / "rankings.csv").open()))
+        header = json.loads((sdir / "header.json").read_text())
+
+        assert len(rows) == header["n_relaxations"]  # every relaxed site is listed
+        energies = [float(r["energy_eV"]) for r in rows]
+        assert energies == sorted(energies)  # most stable first
+        assert [int(r["rank"]) for r in rows] == list(range(1, len(rows) + 1))
+        assert float(rows[0]["dE_from_min_eV"]) == 0.0
+
+        # rank 1 is the canonical winner, and its folder really exists
+        assert rows[0]["folder"] == header["canonical"]
+        assert (sdir / rows[0]["folder"] / "CONTCAR").exists()
+
+        # the recorded margin is the rank1 -> rank2 gap
+        assert header["margin_to_runner_up_eV"] == pytest.approx(
+            energies[1] - energies[0], abs=1e-6
+        )
+
+        # E_ads is present on the adsorbate stage and blank on the vacancy stage
+        if stage == "adsorbate":
+            assert all(r["e_ads_eV"] for r in rows)
+            assert header["min_e_ads"] == pytest.approx(float(rows[0]["e_ads_eV"]), abs=1e-6)
+        else:
+            assert all(r["e_ads_eV"] == "" for r in rows)
+            assert header["min_e_ads"] is None

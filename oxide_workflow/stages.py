@@ -215,7 +215,8 @@ class VacancyCandidate:
 
 
 def oxygen_vacancy_candidates(
-    slab: Structure, symprec: float = 0.1, freeze_bottom_fraction: float = 0.0
+    slab: Structure, symprec: float = 0.1, freeze_bottom_fraction: float = 0.0,
+    max_sites: int | None = None,
 ) -> list[VacancyCandidate]:
     """decorate(slab, O-removal) → one candidate per symmetry-distinct O site (§4).
 
@@ -260,7 +261,11 @@ def oxygen_vacancy_candidates(
     if not candidates:
         raise RuntimeError("no symmetry-distinct oxygen sites found on slab")
     candidates.sort(key=lambda c: c.site_id["site_index"])
-    return candidates
+    # Smoke-test cap. Deliberately a plain head slice, not a spread like the adsorbate
+    # sampler: vacancy classes are already symmetry-distinct, so there is no clustering to
+    # correct for, and keeping the lowest site indices stays deterministic. It CAN drop the
+    # true minimum-energy vacancy, so capped runs are for plumbing checks, not for numbers.
+    return candidates[:max_sites] if max_sites else candidates
 
 
 @dataclass

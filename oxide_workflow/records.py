@@ -1,103 +1,28 @@
 """Records — the on-disk currency of the pipeline (design §2 step 2, §5).
 
-Two dataclass records, each serialized to disk immediately:
+Everything expensive is written to disk the moment it exists, so a run that dies part-way
+still leaves usable results. Two kinds of output live here:
 
-- ``StructureRecord``: a structure at a stage boundary (first-class input) plus its
-  provenance. Serialized as JSON metadata + a POSCAR of the geometry.
-- ``DivergenceRecord``: one long-format row of the divergence table. The schema in
-  design §5 is canonical. Serialized as JSON (appended to a JSONL table).
+- ``DivergenceRecord``: one long-format row of the divergence table (candidate vs
+  reference at one stage). Appended to a JSONL table; the schema in design §5 is canonical.
+- **The run tree**: the browsable per-relaxation folders written by ``write_relaxation``,
+  the aggregate ``header.json`` rollups, and the per-stage ``rankings.csv``.
 
-Structures are pymatgen ``Structure`` objects. POSCAR is the shared geometry format
-that model-env workers (ASE-only, no pymatgen) also read and write, so it is the
-handoff format across the subprocess-isolation boundary.
+Structures are pymatgen ``Structure`` objects. POSCAR is the shared geometry format that
+model-env workers (ASE-only, no pymatgen) also read and write, so it is the handoff format
+across the subprocess-isolation boundary.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 import shutil
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Optional
+from typing import Optional
 
 from pymatgen.core import Structure
-
-
-def _plain_fields(obj: Any) -> dict:
-    """Dataclass -> dict of its scalar/metadata fields, excluding ``structure``."""
-    out = {}
-    for f in fields(obj):
-        if f.name == "structure":
-            continue
-        out[f.name] = getattr(obj, f.name)
-    return out
-
-
-@dataclass
-class StructureRecord:
-    """A structure at a stage boundary, with provenance (design §4, §5 head columns).
-
-    ``geometry_source`` and ``protocol`` capture *how* this geometry came to be, which
-    is what makes seeded vs full-pipeline attribution possible downstream:
-
-    - ``geometry_source``: e.g. ``db`` (warm start), ``seeded`` (built from another
-      model's relaxed previous stage), ``relaxed`` (this model's own relaxed output).
-    - ``protocol``: ``reference`` | ``seeded`` | ``full_pipeline`` | ``basin`` | ``input``.
-
-    ``site_id`` stores a modification's identity as symmetry class + fractional
-    coordinate (design §4) — never file line numbers.
-    """
-
-    structure: Structure
-    stage: str  # bulk | slab | vacancy | adsorbate | assembly
-    model: str  # backend/model that produced this geometry ("" if unrelaxed input)
-    composition: str = ""  # reduced formula; auto-filled from structure if blank
-    polymorph: str = ""  # polymorph label / source mp-id (e.g. "rutile", "mp-2657")
-    facet: str = ""  # e.g. "110"; "" for bulk
-    termination: str = ""  # "" for bulk
-    geometry_source: str = ""
-    protocol: str = ""
-    energy: Optional[float] = None  # total energy after relax (eV); None if unrelaxed
-    fmax: Optional[float] = None  # max force at this geometry (eV/Å)
-    site_id: Optional[dict] = None  # {symmetry_class, frac_coord} for the modification
-    meta: dict = field(default_factory=dict)
-    record_id: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        if not self.composition and self.structure is not None:
-            self.composition = self.structure.composition.reduced_formula
-
-    def default_id(self) -> str:
-        parts = [self.composition, self.stage, self.model or "unrelaxed", self.protocol]
-        return "_".join(p for p in parts if p) or "structure"
-
-    def to_metadata(self) -> dict:
-        return _plain_fields(self)
-
-    def save(self, directory: str | Path) -> Path:
-        """Write ``<record_id>.json`` (metadata) + ``<record_id>.vasp`` (POSCAR).
-
-        Returns the path to the JSON file. Assigns ``record_id`` if not already set.
-        """
-        directory = Path(directory)
-        directory.mkdir(parents=True, exist_ok=True)
-        if self.record_id is None:
-            self.record_id = self.default_id()
-        poscar_path = directory / f"{self.record_id}.vasp"
-        self.structure.to(filename=str(poscar_path), fmt="poscar")
-        meta = self.to_metadata()
-        meta["poscar"] = poscar_path.name
-        json_path = directory / f"{self.record_id}.json"
-        json_path.write_text(json.dumps(meta, indent=2))
-        return json_path
-
-    @classmethod
-    def load(cls, json_path: str | Path) -> "StructureRecord":
-        json_path = Path(json_path)
-        meta = json.loads(json_path.read_text())
-        poscar_name = meta.pop("poscar")
-        structure = Structure.from_file(json_path.parent / poscar_name)
-        return cls(structure=structure, **meta)
 
 
 @dataclass
@@ -165,12 +90,16 @@ def read_divergence_table(path: str | Path) -> list[DivergenceRecord]:
 # energies) plus ``POSCAR`` (initial) / ``CONTCAR`` (final) / ``trajectory.xyz``.
 
 HEADER_NAME = "header.json"
+RANKING_NAME = "rankings.csv"
 OUTCAR_NAME = "OUTCAR"
 POSCAR_NAME = "POSCAR"
 CONTCAR_NAME = "CONTCAR"
 TRAJECTORY_NAME = "trajectory.xyz"
 
-_SINGLE_RELAX_STAGES = ("bulk", "slab")  # one relaxation → files live directly in the stage dir
+# Stages with exactly one relaxation → their files live directly in the stage dir, with no
+# per-site subfolder. ``bare_substrate`` is the E_ads reference state relaxed by the seeded
+# protocol (and by run_stage.py when it enters at the adsorbate stage from a file).
+_SINGLE_RELAX_STAGES = ("bulk", "slab", "bare_substrate")
 
 
 def _sanitize(text: str) -> str:
@@ -200,7 +129,7 @@ def relax_subfolder_name(stage: str, site_id: Optional[dict]) -> str:
     - adsorbate → ``site<site_index>_<position type>`` (densified sampling places several
       sites of the same type — e.g. multiple distinct ``ontop`` — so the type alone is no
       longer unique; the site index disambiguates them)
-    - bulk/slab → ``""`` (files live directly in the stage dir)
+    - bulk / slab / bare_substrate → ``""`` (files live directly in the stage dir)
     """
     if stage in _SINGLE_RELAX_STAGES or not site_id:
         return ""
@@ -215,6 +144,43 @@ def leaf_dir(stage_directory: str | Path, stage: str, site_id: Optional[dict]) -
     sub = relax_subfolder_name(stage, site_id)
     stage_directory = Path(stage_directory)
     return stage_directory / sub if sub else stage_directory
+
+
+# Columns of the per-stage ``rankings.csv``, in order. ``folder`` is the leaf subfolder
+# name, so a row points straight at the geometry that produced it.
+RANKING_COLUMNS = (
+    "rank",
+    "folder",
+    "site_index",
+    "symmetry_class",
+    "energy_eV",
+    "dE_from_min_eV",
+    "e_ads_eV",
+    "converged",
+    "nsteps",
+    "flags",
+)
+
+
+def write_ranking(directory: str | Path, rows: list[dict]) -> Path:
+    """Write a funnel stage's site ranking as CSV, most stable (lowest energy) first.
+
+    The stage directory already holds one leaf folder per candidate, but nothing that
+    *orders* them — you had to reconstruct the ranking from the run-root
+    ``candidates.jsonl``. This puts the answer next to the geometries it ranks.
+
+    ``dE_from_min_eV`` is the column to read before believing any site selection: when the
+    gap to rank 2 is smaller than the model's own accuracy (tens of meV), the sites are
+    degenerate within error and the ordering is noise, not a result.
+    """
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / RANKING_NAME
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=RANKING_COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
 
 
 def write_header(directory: str | Path, header: dict) -> Path:
@@ -243,6 +209,7 @@ _OUTCAR_LINES = (
     ("elapsed_s", "elapsed_s"),
     ("start_fmax", "start_fmax (eV/A)"),
     ("energy", "final_energy (eV)"),
+    ("e_ads", "E_ads (eV)"),  # adsorbate stage only; negative = bound
     ("fmax", "final_fmax (eV/A)"),
     ("adsorbate_max_disp", "adsorbate_max_disp (A)"),
     ("flags", "flags"),

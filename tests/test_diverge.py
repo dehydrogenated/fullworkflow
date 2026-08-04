@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import numpy as np
 
 from oxide_workflow.diverge import diverge
 from oxide_workflow.records import DivergenceRecord, append_divergence, read_divergence_table

@@ -84,7 +84,7 @@ def _winners(cands: list) -> dict:
     out = {}
     for key, rows in groups.items():
         best = min(rows, key=lambda r: r["energy"])
-        out[key] = (best["site_index"], best["energy"], len(rows))
+        out[key] = (best["site_index"], best["energy"], len(rows), best.get("e_ads"))
     return out
 
 
@@ -96,7 +96,6 @@ def print_sites(summary: dict, cands: list) -> None:
         return
 
     wins = _winners(cands)
-    reference = summary.get("reference")
 
     for stage in ("vacancy", "adsorbate"):
         keys = sorted(k for k in wins if k[0] == stage)
@@ -105,17 +104,20 @@ def print_sites(summary: dict, cands: list) -> None:
         ref_key = next((k for k in keys if k[2] == "reference"), None)
         ref_site = wins[ref_key][0] if ref_key else None
         print(f"\n[{stage}]")
+        # E_ads is the comparable number across models (the per-atom reference offset
+        # cancels); the raw total is not. Blank on the vacancy stage, where it's undefined.
         print(f"  {'model':18s}{'protocol':15s}{'best site':>10s}{'n sites':>9s}"
-              f"{'energy eV':>13s}  vs reference")
+              f"{'energy eV':>13s}{'E_ads eV':>11s}  vs reference")
         for k in keys:
-            site, energy, n = wins[k]
+            site, energy, n, e_ads = wins[k]
             if k[2] == "reference":
                 verdict = "(reference)"
             elif ref_site is None:
                 verdict = ""
             else:
                 verdict = "SAME site" if site == ref_site else f"DIFFERENT (ref picked {ref_site})"
-            print(f"  {k[1]:18s}{k[2]:15s}{site:>10d}{n:>9d}{energy:>13.4f}  {verdict}")
+            print(f"  {k[1]:18s}{k[2]:15s}{site:>10d}{n:>9d}{energy:>13.4f}"
+                  f"{_num(e_ads, 11, 3)}  {verdict}")
 
         # Ranking margin: how decisively the reference preferred its winner. A margin
         # smaller than the models' mutual energy error means the ranking is not resolved.

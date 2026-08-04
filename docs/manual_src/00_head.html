@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Oxide Workflow — Field Manual</title>
+<style>
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-sizing: border-box; }
+  @page { size: A4; margin: 16mm 14mm 14mm 14mm; }
+  html { font-size: 10pt; }
+  body { font-family: "Georgia","Iowan Old Style",serif; color:#1b1f24; line-height:1.45; margin:0; }
+  h1,h2,h3,h4,.cover-title,.kicker,code,pre,.tag,table,.num { font-family:-apple-system,"Helvetica Neue",Arial,sans-serif; }
+  h1.chapter { page-break-before: always; font-size:20pt; margin:0 0 2pt; letter-spacing:-0.3px; }
+  .kicker { color:#2563eb; font-size:9pt; font-weight:700; text-transform:uppercase; letter-spacing:1.2px; margin-top:3px; }
+  h2 { font-size:13pt; margin:18px 0 3px; letter-spacing:-0.2px; border-bottom:1px solid #e3e8ee; padding-bottom:2px; }
+  h3 { font-size:10.8pt; margin:12px 0 2px; color:#2b3138; }
+  h4 { font-size:9.6pt; margin:9px 0 1px; color:#47505a; }
+  p { margin:5px 0; }
+  a { color:#2563eb; text-decoration:none; }
+  .muted { color:#5b6570; }
+  code { background:#eef1f5; padding:1px 4px; border-radius:3px; font-size:8.6pt; color:#0b3d91; }
+  pre { background:#0f1720; color:#e6edf3; padding:10px 12px; border-radius:7px; font-size:8pt;
+        line-height:1.42; overflow:auto; page-break-inside:avoid; border-left:4px solid #2563eb; margin:8px 0; }
+  pre code { background:none; color:inherit; padding:0; font-size:8pt; }
+  pre .c { color:#8b949e; } pre .k { color:#ff7b72; } pre .s { color:#a5d6ff; } pre .fn { color:#d2a8ff; } pre .n { color:#79c0ff; }
+  table { border-collapse:collapse; width:100%; font-size:8.2pt; margin:8px 0; page-break-inside:avoid; }
+  th,td { border:1px solid #d3d9e0; padding:4px 6px; text-align:left; vertical-align:top; }
+  th { background:#eef1f5; font-weight:700; }
+  td code, th code { font-size:7.8pt; background:#f4f6f9; }
+  td.num,th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  .callout { border:1px solid #cfe0ff; background:#f2f7ff; border-left:4px solid #2563eb;
+             padding:8px 11px; border-radius:5px; margin:10px 0; page-break-inside:avoid; }
+  .callout.warn { border-color:#f6d6a8; background:#fff8ef; border-left-color:#d97706; }
+  .callout.good { border-color:#bfe6cf; background:#f1fbf5; border-left-color:#0f766e; }
+  .callout.stop { border-color:#f5c2c7; background:#fff5f5; border-left-color:#dc2626; }
+  .callout .h { font-family:-apple-system,Arial,sans-serif; font-weight:700; font-size:8.8pt; display:block; margin-bottom:2px; }
+  ul,ol { margin:5px 0; padding-left:19px; } li { margin:2px 0; }
+  .cover { height:246mm; display:flex; flex-direction:column; justify-content:center; page-break-after:always; }
+  .cover-title { font-size:34pt; font-weight:800; letter-spacing:-1.4px; line-height:1.03; margin:0; color:#0b1220; }
+  .cover-sub { font-size:13pt; color:#3b4550; margin-top:12px; max-width:150mm; }
+  .cover-meta { margin-top:30px; font-family:-apple-system,Arial,sans-serif; font-size:9pt; color:#5b6570; }
+  .rule { height:4px; width:70px; background:#2563eb; border-radius:3px; margin:20px 0; }
+  .toc { font-family:-apple-system,Arial,sans-serif; page-break-after:always; }
+  .toc ol { list-style:none; padding-left:0; }
+  .toc li { display:flex; justify-content:space-between; border-bottom:1px dotted #cfd6de; padding:4px 0; font-size:9pt; }
+  .toc li .t { font-weight:600; } .toc li .d { color:#5b6570; font-size:8.4pt; text-align:right; max-width:95mm; }
+  .star { color:#d97706; font-weight:700; letter-spacing:-1px; }
+  .small { font-size:8.2pt; } .center { text-align:center; }
+  .sig { font-family:-apple-system,Arial,sans-serif; font-size:8pt; color:#0b3d91; }
+  .lbl { display:inline-block; font-size:7.2pt; font-weight:700; padding:1px 5px; border-radius:8px; color:#fff; }
+  .lbl.phys { background:#0f766e; } .lbl.plumb { background:#64748b; } .lbl.io { background:#7c3aed; }
+  .nobreak { page-break-inside:avoid; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="kicker">Offline reading copy</div>
+  <h1 class="cover-title">Oxide Workflow<br>Field Manual</h1>
+  <div class="rule"></div>
+  <div class="cover-sub">A complete lookup table for <code>fullworkflow</code> — every module, every
+  function, every unfamiliar piece of Python syntax decoded, and a map of which parts are worth
+  your attention.</div>
+  <div class="cover-meta">
+    Covers <strong>oxide_workflow v0.3.0</strong> · 10 modules · ~2,150 lines of package code<br>
+    Generated 2026-08-01 · commit <code>704f9aa</code> · Sean Song<br><br>
+    <em>No network required. Everything you need to read this codebase is in these pages.</em>
+  </div>
+</section>
+
+<section class="toc">
+<h2>Contents</h2>
+<ol>
+  <li><span class="t">0 · How to read this on a plane</span><span class="d">Three routes: 30 min, 3 h, full depth</span></li>
+  <li><span class="t">1 · The whole thing in one page</span><span class="d">What the code does and why it exists</span></li>
+  <li><span class="t">2 · Module map</span><span class="d">Lookup table: every file, its job, read priority</span></li>
+  <li><span class="t">3 · Execution trace</span><span class="d">Follow one run from <code>run()</code> to disk</span></li>
+  <li><span class="t">4 · Function index</span><span class="d">Every function, signature, file:line, one-line meaning</span></li>
+  <li><span class="t">5 · Python syntax decoder</span><span class="d">Every idiom in this repo, with the line it appears on</span></li>
+  <li><span class="t">6 · NumPy &amp; the minimum-image convention</span><span class="d">The one pattern that repeats 6 times</span></li>
+  <li><span class="t">7 · pymatgen &amp; ASE cheat sheet</span><span class="d">Only the objects this repo actually touches</span></li>
+  <li><span class="t">8 · The four algorithms worth real study</span><span class="d">Where the physics lives</span></li>
+  <li><span class="t">9 · What lands on disk</span><span class="d">Tree layout, file schemas, a worked example</span></li>
+  <li><span class="t">10 · Config knob reference</span><span class="d">Every default, its units, what breaks if you move it</span></li>
+  <li><span class="t">11 · Focus guide &amp; sharp edges</span><span class="d">Read this if you read nothing else</span></li>
+  <li><span class="t">12 · Exercises (no computer needed)</span><span class="d">Trace-throughs with answers</span></li>
+  <li><span class="t">A · Glossary &amp; CLI card</span><span class="d">Domain terms and command recipes</span></li>
+</ol>
+</section>
+
+<h1 class="chapter">0 · How to read this on a plane</h1>
+<div class="kicker">Orientation</div>
+
+<p>This manual is a <strong>reference</strong>, not a narrative. You are not expected to read it
+front to back. Pick a route.</p>
+
+<h3>Route A — 30 minutes, "remind me what this does"</h3>
+<p>Chapter 1 (one page), then the module map table in Chapter 2, then Chapter 11 (focus guide).
+That is enough to hold the whole system in your head.</p>
+
+<h3>Route B — 3 hours, "I want to be able to change things"</h3>
+<p>Route A, then Chapter 3 (execution trace) with <code>pipeline.py</code> open beside it, then
+Chapter 5 (syntax) whenever a line looks strange, then Chapter 10 (knobs).</p>
+
+<h3>Route C — the full flight</h3>
+<p>Everything, in order. Chapter 8 is the intellectual core — the placement geometry and the
+divergence metric are the only parts of this codebase where a subtle error would produce
+plausible-looking wrong physics rather than a crash. Chapter 12 has exercises you can do with
+a pen.</p>
+
+<div class="callout">
+<span class="h">How to use the labels</span>
+Throughout, functions carry one of three tags:
+<span class="lbl phys">PHYSICS</span> the result depends on it being chemically right;
+<span class="lbl plumb">PLUMBING</span> orchestration and bookkeeping — correctness is obvious;
+<span class="lbl io">I/O</span> reads or writes disk.
+Read every <span class="lbl phys">PHYSICS</span> function carefully. Skim the rest.
+</div>
+
+<div class="callout warn">
+<span class="h">Star ratings</span>
+<span class="star">★★★</span> read closely — this is where the science is ·
+<span class="star">★★</span> understand the shape, skim the body ·
+<span class="star">★</span> know it exists, look it up when needed.
+</div>
+
+<h1 class="chapter">1 · The whole thing in one page</h1>
+<div class="kicker">Mental model</div>
+
+<h2>The question the code answers</h2>
+<p>Machine-learned interatomic potentials (MLIPs) are fast enough to replace DFT for surface
+chemistry — <em>if</em> you trust them. This codebase measures where that trust breaks. It runs the
+same four-stage relaxation chain twice, once with a <strong>reference</strong> model and once with a
+<strong>candidate</strong> model, and records how far apart they drift at every stage.</p>
+
+<pre><code><span class="c"># the chain — each stage's input is the previous stage's RELAXED output + one fresh change</span>
+bulk  ──cut──▶  slab  ──remove an O──▶  vacancy  ──place a fragment──▶  adsorbate
+ │               │                       │                              │
+ relax          relax                   relax ×N sites                relax ×N sites
+                                        keep min-energy               keep min-energy</code></pre>
+
+<h2>The two protocols — this is the central idea</h2>
+<p>The candidate model runs that chain <strong>twice</strong>, differing only in where each stage's
+input comes from:</p>
+
+<table>
+<tr><th style="width:22%">Protocol</th><th style="width:38%">Each stage is built from…</th><th>What the divergence then means</th></tr>
+<tr><td><code>seeded</code></td><td>the <strong>reference's</strong> relaxed previous stage</td>
+<td><strong>Intrinsic</strong> per-stage error. Both models start from identical geometry, so any
+difference is that one stage's fault.</td></tr>
+<tr><td><code>full_pipeline</code></td><td>the <strong>candidate's own</strong> relaxed previous stage</td>
+<td><strong>Accumulated</strong> error. Realistic — this is what you'd get using the model for real.</td></tr>
+</table>
+
+<p>The contrast between the two <em>is</em> the result: seeded says which stage is weak,
+full-pipeline says whether the weakness compounds.</p>
+
+<div class="callout warn">
+<span class="h">"Seeded" does not mean what it sounds like</span>
+It refers to which <em>previous</em> stage's output you inherit — never to starting at the current
+stage's answer. Starting a stage from the reference's relaxed version of that <em>same</em> stage
+would be the "flattery trap": the candidate would look great because it started at the finish
+line. Design doc §3 calls this out explicitly; the code never does it.
+</div>
+
+<h2>Who calls whom</h2>
+<p>The author's own summary, from <code>oxide_workflow/__init__.py:1</code>, is the best one-paragraph
+description of the system and worth memorising:</p>
+
+<div class="callout good">
+<span class="h">The system in the author's words</span>
+<code>pipeline.py</code> asks <code>structures.py</code> for a bulk crystal. It sends it to
+<code>backends.py</code> to be relaxed (which farms it out to <code>worker_relax.py</code>). It hands
+the relaxed bulk to <code>stages.py</code> to cut a slab, sends that off to be relaxed, hands that to
+<code>stages.py</code> to make ~6 vacancy structures, relaxes all 6, keeps the best, hands it to
+<code>stages.py</code> for ~7 adsorbate placements, relaxes all 7. Then it does the same chain with
+the candidate model, and uses <code>diverge.py</code> to compare the two at every step.
+<code>checks.py</code> flags anything suspicious, <code>records.py</code> writes it all down, and
+<code>config.py</code> supplied the numbers throughout.
+</div>
+
+<h2>The one structural trick: subprocess isolation</h2>
+<p>MACE and FAIRChem live in <strong>mutually incompatible conda environments</strong>. So the
+orchestrator never imports a model. Instead <code>backends.relax()</code> writes a POSCAR and a
+<code>job.json</code> to a temp directory, launches <em>the model env's own Python interpreter</em> on
+<code>worker_relax.py</code>, and reads the answer back off disk.</p>
+
+<pre><code><span class="c"># backends.py:107 — the entire abstraction, made physical</span>
+proc = subprocess.run([backend.interpreter(), str(WORKER), str(jobfile)], ...)</code></pre>
+
+<p>This is why <code>worker_relax.py</code> imports only ASE and the model package — never pymatgen,
+never <code>oxide_workflow</code>. The disk is the interface. Keep this in mind: <strong>a
+"backend" is a subprocess recipe, not a Python object with a compute method.</strong></p>

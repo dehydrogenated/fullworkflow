@@ -1,0 +1,15 @@
+{
+  "identifier": "mp-6947",
+  "source": "materials-project",
+  "query": "formula=SiO2 spacegroup_number=136",
+  "energy_above_hull": 0.20171111388889074,
+  "is_stable": false,
+  "theoretical": false,
+  "family": "rutile",
+  "note": "stishovite \u2014 high-pressure rutile SiO2, far off-hull by construction",
+  "mp_database_version": "2026.04.13",
+  "added_utc": "2026-08-04T20:21:54+00:00",
+  "formula": "SiO2",
+  "n_sites": 6,
+  "spacegroup": "P4_2/mnm"
+}
