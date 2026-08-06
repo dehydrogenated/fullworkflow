@@ -3,6 +3,8 @@ adsorbate-site placement (the two ``decorate`` modifications)."""
 
 from __future__ import annotations
 
+import re
+
 from oxide_workflow.config import AdsorbateConfig, SlabConfig
 from oxide_workflow.stages import (
     adsorbate_candidates,
@@ -29,7 +31,9 @@ def test_vacancy_candidates_are_distinct_and_carry_site_identity():
         # Exactly one O removed from the slab.
         assert len(c.structure) == len(slab) - 1
         # Site identity is symmetry class + fractional coordinate (never line numbers).
-        assert set(c.site_id) == {"symmetry_class", "frac_coord", "site_index"}
+        # both identities: the geometric class AND the chemical coordination label
+        assert set(c.site_id) == {"symmetry_class", "site_label", "frac_coord", "site_index"}
+        assert re.fullmatch(r"[A-Z][a-z]?\d+c", c.site_id["site_label"]), c.site_id
         assert len(c.site_id["frac_coord"]) == 3
     # Deterministic ordering by site index (enables seeded per-stage site matching).
     idxs = [c.site_id["site_index"] for c in cands]
@@ -49,7 +53,9 @@ def test_adsorbate_candidates_carry_site_identity():
         # The fragment's atoms were added on top of the substrate (unrelaxed placement).
         assert len(c.structure) == len(slab) + n_ads
         # Site identity is symmetry class + fractional coordinate (never line numbers).
-        assert set(c.site_id) == {"symmetry_class", "frac_coord", "site_index"}
+        # both identities: the geometric class AND the chemical coordination label
+        assert set(c.site_id) == {"symmetry_class", "site_label", "frac_coord", "site_index"}
+        assert re.fullmatch(r"[A-Z][a-z]?\d+c", c.site_id["site_label"]), c.site_id
         # Arm 1 uses a geometric type; arm 2 uses an ``atop_<element><wyckoff>`` label.
         sc = c.site_id["symmetry_class"]
         assert sc in cfg.positions or sc.startswith("atop_")

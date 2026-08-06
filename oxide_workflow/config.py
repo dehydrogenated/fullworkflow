@@ -1,13 +1,11 @@
-"""Every chemistry and relaxation knob, in one place.
+"""
+Every chemistry and relaxation knob.
 
-Defaults are tuned for the stoichiometric rutile TiO2 (110) surface (pymatgen's
-termination index 1), and have been checked to hold for the whole rutile family —
-SnO2, GeO2, RuO2, IrO2, PbO2 and stishovite SiO2 all cut the same surface type at
-that index. ``scripts/validate_materials.py`` re-checks this for any new material.
+Defaults settings tuned for the stoichiometric rutile TiO2 (110) surface (pymatgen's
+termination index 1). ``scripts/validate_materials.py`` re-checks this for any new material.
 
 Every value below has a matching command-line flag. Edit this file to change the
 default for everything; pass the flag to change one run. The flag always wins.
-See docs/oxide-workflow-user-guide.pdf for the full knob-to-flag mapping.
 """
 
 from __future__ import annotations
@@ -43,7 +41,24 @@ class AdsorbateConfig:
     exposure_block_radius: float = 1.3  # Å; nothing sits 1.3 A sideways from it
 
     # Where the adsorbate starts
-    seed_standoff: float = 0  # Å added to the covalent bond length to not be too far or close
+    # Å added to the covalent bond length when solving the placement height.
+    #
+    # 0.2, measured on rutile(110) with O2 on the O2c-vacancy slab. Covalent radii are the
+    # wrong reference and are wrong in OPPOSITE directions for the two pair types, so this
+    # single knob is a compromise, not a fix:
+    #
+    #   Ti-O  covalent 2.26 A but adsorbed O2 relaxes to ~2.0 A -> covalent is already long
+    #   O-O   covalent 1.32 A but a peroxide bond is ~1.45 A    -> covalent is far too close
+    #
+    # Measured behaviour of the ontop/Ti5c site (the one that matters):
+    #   0.0  starts 1.32 A from a lattice O, start_fmax 10.1 eV/A, spawns in contact
+    #   0.2  starts 2.46 A from Ti, start_fmax 3.6, moves 1.71 A, binds at 2.04 A  <- here
+    #   0.3  starts 2.56 A from Ti, start_fmax 1.9, moves 0.03 A, never interacts
+    #
+    # The window is narrow: 0.1 A more and the initial force drops below what drives the
+    # approach. The real fix is pair-type-aware placement — set the height from the anchor
+    # atom the site sits over, and enforce a separate larger floor for anion-anion contact.
+    seed_standoff: float = 0.2
     min_normal_height: float = 0.5  # Å floor when the site is further from its atom sideways than the bond length, so there is no vertical solution
     min_clearance: float = 0.8  # reject a placement closer than this x the covalent bond length to any slab atom — the guard against spawning inside a surface atom
     symm_reduce: float = 0.01  # pymatgen: how close (fractional coords) before two sites merge
@@ -56,21 +71,10 @@ ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, 
     "H": (("H",), ((0.0, 0.0, 0.0),)),
     "CO": (("C", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.128))),  # C-down, gas-phase C-O = 1.128 A
     "H2O": (("O", "H", "H"), ((0.0, 0.0, 0.0), (0.0, 0.757, 0.5859), (0.0, -0.757, 0.5859))),
-    # Oxygen. O2 is the physical gas reservoir — atomic O does not free-float — so it is the
-    # right reference for exposing a surface to oxygen. Its E_ads carries the well-known GGA
-    # O2 overbinding error (a few tenths of an eV, inherited by anything trained on PBE), so
-    # treat absolute O2 numbers with suspicion; site rankings and E_ads differences within a
-    # model are unaffected (the reference is one constant).
     "O2": (("O", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.208))),  # end-on, gas-phase O-O = 1.208 A
-    # Side-on: both atoms at z=0, so pymatgen straddles the site. The better start when O2 is
-    # expected to lie flat and dissociate (vacancy healing) — an end-on start rarely finds it.
-    "O2-side": (("O", "O"), ((0.0, -0.604, 0.0), (0.0, 0.604, 0.0))),
-    # Atomic O: the direct vacancy-healing probe (put an O back where one was removed). Its
-    # gas reference is an isolated atom, which no MLIP here treats with a spin state — the
-    # shakiest reference in the set. Prefer O2 unless you specifically want the atom.
+    "O2-side": (("O", "O"), ((0.0, -0.604, 0.0), (0.0, 0.604, 0.0))), # Side-on: both atoms at z=0
     "O": (("O",), ((0.0, 0.0, 0.0),)),
 }
-
 
 @dataclass(frozen=True)
 class RunConfig:

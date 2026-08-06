@@ -77,20 +77,27 @@ def gas_reference_energy(
     cfg,
     relax_fn: Callable,
     cachedir: str | Path = GAS_CACHE_DIR,
+    species: tuple[str, ...] | None = None,
+    coords: tuple[tuple[float, float, float], ...] | None = None,
 ) -> float:
-    """Relaxed total energy of the isolated adsorbate fragment for this model.
+    """Relaxed total energy of an isolated fragment for this model.
+
+    Defaults to the configured adsorbate; pass ``species``/``coords`` for a different
+    fragment (the oxygen chemical potential needs O2 even when the adsorbate is CO).
 
     Cheap (a handful of atoms) but not free, and identical for every site, protocol,
     facet and material in a sweep — so it is computed once and cached on disk.
 
-    ``fmax`` is part of the cache key deliberately. E_ads mixes three energies, so a gas
-    reference converged to a looser tolerance than the adsorbate run leaks that difference
-    straight into E_ads; reusing a loose reference for a tight run would be a silent error.
+    ``fmax`` is part of the cache key deliberately. E_ads and E_vac each mix three
+    energies, so a gas reference converged to a looser tolerance than the run that uses it
+    leaks that difference straight into the result; silently reusing a loose reference for
+    a tight run would be a real error.
 
     ``relax_fn`` is injected rather than imported so the caller controls the relaxation
     seam (the pipeline passes its own, which is what the test suite fakes).
     """
-    species, coords = cfg.adsorbate.species, cfg.adsorbate.coords
+    if species is None or coords is None:
+        species, coords = cfg.adsorbate.species, cfg.adsorbate.coords
     key = fragment_key(species, coords)
     cachedir = Path(cachedir)
     cache = cachedir / f"gas_{backend.name}_{key}_fmax{cfg.relax.fmax}.json"
@@ -137,3 +144,63 @@ def adsorption_energy(
     if e_total is None or e_substrate is None or e_gas is None:
         return None
     return float(e_total - e_substrate - e_gas)
+
+
+# --- Oxygen vacancy formation ------------------------------------------------------------
+
+# Which reservoir the removed oxygen atom is returned to. This is a *convention*, not a
+# constant, and papers always state which one they used:
+#
+#   "O-rich"  mu_O = E(O2)/2  -- equilibrium with an O2 atmosphere. Implemented here.
+#   "O-poor"  mu_O referenced to the bulk oxide's formation enthalpy instead. Gives a
+#             systematically different (often >1 eV) E_vac for the same structure.
+#
+# The label is written into every record so a number can never be read under the wrong
+# convention. Adding the O-poor limit means computing the bulk reference and passing a
+# different mu_O here; nothing else changes.
+OXYGEN_REFERENCE = "O-rich (mu_O = E(O2)/2)"
+
+
+def oxygen_chemical_potential(
+    backend, cfg, relax_fn: Callable, cachedir: str | Path = GAS_CACHE_DIR
+) -> float:
+    """mu_O in the O-rich limit: half this model's relaxed O2 total energy, in eV.
+
+    Deliberately independent of ``cfg.adsorbate`` — a vacancy run needs oxygen's chemical
+    potential whether the adsorbate is O2, CO or nothing at all. Shares the same on-disk
+    cache as every other gas reference, so at most one O2 relaxation happens per
+    (model, fmax) across an entire sweep.
+
+    Carries the well-known GGA O2 overbinding error, which every PBE-trained model here
+    inherits. Because mu_O is *half* E(O2), an error of ~0.5-1 eV in the molecule puts
+    ~0.25-0.5 eV directly into every E_vac. It is a constant per model, so trends across
+    sites and materials survive it; absolute values should be quoted with the caveat.
+    """
+    from .config import ADSORBATE_FRAGMENTS
+
+    species, coords = ADSORBATE_FRAGMENTS["O2"]
+    e_o2 = gas_reference_energy(backend, cfg, relax_fn, cachedir, species=species, coords=coords)
+    return float(e_o2 / 2.0)
+
+
+def vacancy_formation_energy(
+    e_defective: Optional[float], e_pristine: Optional[float], mu_o: Optional[float]
+) -> Optional[float]:
+    """E_vac = E(defective slab) - E(pristine slab) + mu_O, in eV.
+
+    Positive; a *smaller* value means the vacancy is easier to form. All three terms must
+    come from the same calculator, for the same reason E_ads does: the per-atom energy
+    offset only cancels when the atom counts balance across the expression.
+
+    Within one material this is a constant offset from the raw defective-slab energy, so
+    it never changes which site the funnel picks. Its value is in making vacancies
+    *comparable across materials* — two rutile slabs of different composition have totally
+    incomparable total energies, but their formation energies sit on one axis. It is also
+    the quantity with a real literature benchmark to check a model against.
+
+    ``None`` if any term is missing, so a stage without a reference state reports nothing
+    rather than something wrong.
+    """
+    if e_defective is None or e_pristine is None or mu_o is None:
+        return None
+    return float(e_defective - e_pristine + mu_o)

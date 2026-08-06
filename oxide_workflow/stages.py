@@ -233,6 +233,10 @@ def oxygen_vacancy_candidates(
     sym = sga.get_symmetrized_structure()
     wyckoffs = getattr(sym, "wyckoff_symbols", None)
     cutoff = bottom_cutoff_z(slab, freeze_bottom_fraction)
+    # Coordination of the O being removed, so a vacancy can be named the way literature
+    # names it: on rutile(110) the classic defect is a missing bridging O2c, and an O3c
+    # vacancy is a different (in-plane, much less favourable) thing entirely.
+    environments = _site_environments(slab)
 
     candidates: list[VacancyCandidate] = []
     for group_idx, group in enumerate(sym.equivalent_indices):
@@ -248,11 +252,13 @@ def oxygen_vacancy_candidates(
         vac.remove_sites([rep])
         apply_bottom_freeze(vac, freeze_bottom_fraction)
         symmetry_class = wyckoffs[group_idx] if wyckoffs else f"group{group_idx}"
+        element, _deficit, cn = environments[rep]
         candidates.append(
             VacancyCandidate(
                 structure=vac,
                 site_id={
                     "symmetry_class": symmetry_class,
+                    "site_label": site_label(element, cn),  # e.g. "O2c" = bridging oxygen
                     "frac_coord": [float(x) for x in slab[rep].frac_coords],
                     "site_index": int(rep),
                 },
@@ -283,13 +289,34 @@ class AdsorbateCandidate:
 _CN_CUTOFF = 2.6  # Å; first cation-anion shell (rutile Ti-O is 1.95-2.00, second shell is >3)
 
 
-def _site_environments(substrate: Structure) -> "dict[int, tuple[str, int]]":
-    """(element, coordination deficit) per atom — the chemical identity of a surface site.
+def site_label(element: str, coordination: int) -> str:
+    """Literature-style coordination label for a surface atom, e.g. ``"Ti5c"``.
+
+    The standard surface-science shorthand: element symbol, number of counter-ion nearest
+    neighbours, then "c" for coordinate. On rutile(110) the reactive sites are the
+    five-coordinate cation ``Ti5c`` (bulk Ti is octahedral, 6-coordinate) and the bridging
+    oxygen ``O2c`` (bulk O is 3-coordinate); ``Ti6c`` and ``O3c`` are bulk-like and inert.
+
+    What counts as undercoordinated is a property of the structure, not of the element —
+    in a tetrahedral oxide ``M4c`` would be the saturated one. That is why the pipeline
+    ranks sites by *deficit* (see ``_site_environments``) and uses this label only for
+    reporting: the label is what you compare against a paper, the deficit is what drives
+    the sampling.
+    """
+    return f"{element}{coordination}c"
+
+
+def _site_environments(substrate: Structure) -> "dict[int, tuple[str, int, int]]":
+    """(element, coordination deficit, coordination) per atom — a surface site's identity.
 
     Deficit is counted against the most-coordinated atom of the same element in the cell,
     which is bulk-like by construction, so undercoordinated surface atoms score higher
     without hard-coding any polymorph's bulk coordination numbers. On rutile(110) this
     separates the reactive Ti5c and bridging O2c from the saturated Ti6c and O3c.
+
+    The absolute coordination is carried alongside so the site can also be *named* the way
+    literature names it (``site_label``). Deficit drives selection because it is
+    material-agnostic; the absolute number is for the human reading the output.
     """
     coordination = {
         i: sum(1 for nb in shell if str(nb.specie) != str(substrate[i].specie))
@@ -300,12 +327,13 @@ def _site_environments(substrate: Structure) -> "dict[int, tuple[str, int]]":
         element = str(substrate[i].specie)
         bulk[element] = max(bulk.get(element, 0), c)
     return {
-        i: (str(substrate[i].specie), bulk[str(substrate[i].specie)] - c)
+        i: (str(substrate[i].specie), bulk[str(substrate[i].specie)] - c, c)
         for i, c in coordination.items()
     }
 
 
-def _spread_sites(placed: list, n: int | None, lattice, substrate: Structure) -> list:
+def _spread_sites(placed: list, n: int | None, lattice, substrate: Structure,
+                  environments: dict | None = None) -> list:
     """Keep ``n`` of the ``(coord, site atom)`` pairs: one per environment, then spread.
 
     A plain ``[:n]`` slice takes pymatgen's enumeration order, which is spatially
@@ -332,11 +360,11 @@ def _spread_sites(placed: list, n: int | None, lattice, substrate: Structure) ->
         f -= np.round(f)
         return float(np.linalg.norm(f @ lattice.matrix))
 
-    environments = _site_environments(substrate)
+    environments = environments if environments is not None else _site_environments(substrate)
 
-    def _env(i: int) -> "tuple[str, int]":
+    def _env(i: int) -> "tuple[str, int, int]":
         site_atom = placed[i][1]
-        return environments[site_atom] if site_atom is not None else ("", -1)
+        return environments[site_atom] if site_atom is not None else ("", -1, -1)
 
     remaining = list(range(len(placed)))  # indices: coords are arrays, so `in`/`remove` break
     kept: list[int] = []
@@ -391,6 +419,9 @@ def adsorbate_candidates(
     asf = AdsorbateSiteFinder(substrate.copy(site_properties={"surface_properties": props}))
     cutoff = bottom_cutoff_z(substrate, freeze_bottom_fraction)
     L = substrate.lattice
+    # Computed once here rather than per position type inside _spread_sites, and reused to
+    # name each surviving site the way literature would (Ti5c, O2c, ...).
+    environments = _site_environments(substrate)
 
     candidates: list[AdsorbateCandidate] = []
 
@@ -412,7 +443,7 @@ def adsorbate_candidates(
                 )
         return worst
 
-    def _add(coord, symmetry_class: str) -> None:
+    def _add(coord, symmetry_class: str, anchor: "int | None") -> None:
         if cutoff is not None and coord[2] <= cutoff + 1e-6:
             return  # top (free) surface only — a placement on the frozen face can't relax
         ads = asf.add_adsorbate(molecule, coord)  # unrelaxed placement
@@ -427,11 +458,19 @@ def adsorbate_candidates(
             freeze_bottom_fraction,
             always_free=set(range(len(clean) - n_ads, len(clean))),
         )
+        # The atom the site sits over, named the way a paper would name it. Exact for
+        # ontop; for bridge/hollow it is the laterally nearest exposed atom, so read it as
+        # "this site sits over a Ti5c", not as a full description of a two-atom bridge.
+        label = ""
+        if anchor is not None and anchor in environments:
+            element, _deficit, cn = environments[anchor]
+            label = site_label(element, cn)
         candidates.append(
             AdsorbateCandidate(
                 structure=clean,
                 site_id={
                     "symmetry_class": symmetry_class,
+                    "site_label": label,
                     "frac_coord": [float(x) for x in L.get_fractional_coords(coord)],
                     "site_index": len(candidates),  # running index, unique per candidate
                 },
@@ -449,8 +488,9 @@ def adsorbate_candidates(
             z, anchor = _placement_z(substrate, coord, exposed, ads_symbol, config)
             placed.append((np.array([coord[0], coord[1], z]), anchor))
         # Cap each position type to a spread-out subset (all of them when uncapped).
-        for coord, _anchor in _spread_sites(placed, config.max_per_position, L, substrate):
-            _add(coord, ptype)
+        for coord, anchor in _spread_sites(placed, config.max_per_position, L, substrate,
+                                           environments):
+            _add(coord, ptype, anchor)
 
     if not candidates:
         raise RuntimeError("no adsorption sites found on substrate")

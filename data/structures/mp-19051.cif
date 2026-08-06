@@ -1,0 +1,46 @@
+# generated using pymatgen
+data_LaCoO3
+_symmetry_space_group_name_H-M   'P 1'
+_cell_length_a   5.36115326
+_cell_length_b   5.44114223
+_cell_length_c   7.62069411
+_cell_angle_alpha   89.96705311
+_cell_angle_beta   88.82682862
+_cell_angle_gamma   89.78964199
+_symmetry_Int_Tables_number   1
+_chemical_formula_structural   LaCoO3
+_chemical_formula_sum   'La4 Co4 O12'
+_cell_volume   222.25359957
+_cell_formula_units_Z   4
+loop_
+ _symmetry_equiv_pos_site_id
+ _symmetry_equiv_pos_as_xyz
+  1  'x, y, z'
+loop_
+ _atom_site_type_symbol
+ _atom_site_label
+ _atom_site_symmetry_multiplicity
+ _atom_site_fract_x
+ _atom_site_fract_y
+ _atom_site_fract_z
+ _atom_site_occupancy
+  La  La0  1  0.99948203  0.49973050  0.24991492  1.0
+  La  La1  1  0.50070562  0.99973959  0.75028351  1.0
+  La  La2  1  0.49929438  0.00026041  0.24971649  1.0
+  La  La3  1  0.00051797  0.50026950  0.75008508  1.0
+  Co  Co4  1  0.00000000  0.00000000  0.00000000  1.0
+  Co  Co5  1  0.00000000  0.00000000  0.50000000  1.0
+  Co  Co6  1  0.50000000  0.50000000  0.50000000  1.0
+  Co  Co7  1  0.50000000  0.50000000  0.00000000  1.0
+  O  O8  1  0.49788782  0.55596013  0.24995151  1.0
+  O  O9  1  0.99743356  0.05594284  0.75002998  1.0
+  O  O10  1  0.00256644  0.94405716  0.24997002  1.0
+  O  O11  1  0.50211218  0.44403987  0.75004849  1.0
+  O  O12  1  0.77657854  0.72341886  0.52617237  1.0
+  O  O13  1  0.27400112  0.22602775  0.02655902  1.0
+  O  O14  1  0.72599888  0.77397225  0.97344098  1.0
+  O  O15  1  0.22342146  0.27658114  0.47382763  1.0
+  O  O16  1  0.22533486  0.72536431  0.97055492  1.0
+  O  O17  1  0.72285158  0.22285145  0.47085785  1.0
+  O  O18  1  0.27714842  0.77714855  0.52914215  1.0
+  O  O19  1  0.77466514  0.27463569  0.02944508  1.0

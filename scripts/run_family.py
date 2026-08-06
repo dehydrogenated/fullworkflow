@@ -48,21 +48,24 @@ RUTILES = {
     "mp-6947": "SiO2",
 }
 
-# Wall-clock model, calibrated on this machine from two measured points:
-#   192-atom slab, 90 steps -> 292 s   (runs/COtest_july29 adsorbate leaf)
-#    24-atom slab, 20 steps ->  12.7 s (direct timing, MACE-mh1-omat on CPU)
-# giving t ~= FIXED + PER_ATOM_STEP * n_atoms * steps. A flat per-relaxation constant is
-# badly wrong the moment the supercell or step cap changes, which is exactly what a smoke
-# test does — hence the explicit atom/step dependence.
-FIXED_S = 4.7          # process launch + model load
-PER_ATOM_STEP_S = 0.0166
-# Relaxations usually converge well before max_steps (COtest averaged ~90), so a raw
-# max_steps of 300 would overestimate by ~3x. Cap the estimate at the observed typical.
-TYPICAL_STEPS = 90
+# Wall-clock model, calibrated per stage from runs/COtest_july29 (50 relaxations, 6.6 h,
+# 192-atom slabs, fmax 0.03). Treat it as an UPPER BOUND: it reproduces that run almost
+# exactly but overestimates small cells by roughly 2x (runs/rutile_smoke predicted 24 min,
+# took 11), because the per-atom-per-step constant is measured at 192 atoms. It also does
+# not model fmax at all, so a looser tolerance finishes sooner than predicted. A single per-relaxation constant is badly wrong here: the
+# adsorbate stage averages 161 optimizer steps against 44 for a vacancy, so it costs ~4x
+# as much per relaxation. Cost is ~ atoms x steps, so both dependencies are explicit.
+SEC_PER_ATOM_STEP = 4.5 / 192      # measured s/step on a 192-atom slab
+FIXED_S = 5.0                      # process launch + model load
+TYPICAL_STEPS = {"bulk": 16, "slab": 42, "vacancy": 44, "adsorbate": 161}
 
 
-def _estimate_seconds(n_atoms: int, max_steps: int) -> float:
-    return FIXED_S + PER_ATOM_STEP_S * n_atoms * min(max_steps, TYPICAL_STEPS)
+def _stage_seconds(stage: str, n_atoms: int, max_steps: int) -> float:
+    """Estimated wall time for one relaxation of ``stage`` on an ``n_atoms`` cell."""
+    steps = min(max_steps, TYPICAL_STEPS.get(stage, 100))
+    # bulk is a handful of atoms, not the slab
+    atoms = 6 if stage == "bulk" else n_atoms
+    return FIXED_S + SEC_PER_ATOM_STEP * atoms * steps
 
 
 def _plan(materials: list[str], cfg: RunConfig, protocols: tuple[str, ...],
@@ -87,15 +90,22 @@ def _plan(materials: list[str], cfg: RunConfig, protocols: tuple[str, ...],
             )
             # reference chain: bulk + slab + vacancies + adsorbates.
             ref = 2 + len(vacs) + len(ads)
-            # each candidate: one shared bulk, then per protocol slab + funnels
-            # (+1 bare-substrate relaxation for seeded, which needs its own E_ads reference).
+            n, ms = len(slab), cfg.relax.max_steps
+            chain_s = (_stage_seconds("bulk", n, ms) + _stage_seconds("slab", n, ms)
+                       + len(vacs) * _stage_seconds("vacancy", n, ms)
+                       + len(ads) * _stage_seconds("adsorbate", n, ms))
+            # each candidate: one shared bulk, then per protocol slab + funnels. seeded
+            # adds two single relaxations (pristine_slab and bare_substrate) because it
+            # must evaluate the reference's geometries with its own calculator to get
+            # E_vac and E_ads; full_pipeline gets both free from its own chain.
             per_proto = 1 + len(vacs) + len(ads)
-            cand = 1 + sum(per_proto + (1 if p == "seeded" else 0) for p in protocols)
+            cand = 1 + sum(per_proto + (2 if p == "seeded" else 0) for p in protocols)
             total = ref + n_candidates * cand
+            # reference chain once, then one chain per candidate per protocol
+            seconds = chain_s * (1 + n_candidates * len(protocols))
             rows.append({"material": m, "formula": RUTILES.get(m, "?"),
                          "n_vac": len(vacs), "n_ads": len(ads), "relaxations": total,
-                         "n_atoms": len(slab),
-                         "seconds": total * _estimate_seconds(len(slab), cfg.relax.max_steps)})
+                         "n_atoms": len(slab), "seconds": seconds})
         except Exception as exc:  # noqa: BLE001
             rows.append({"material": m, "formula": RUTILES.get(m, "?"), "error": str(exc)})
     return rows
@@ -131,6 +141,8 @@ def main(a) -> None:
                           max_per_position=a.cap or None),
         relax=replace(cfg.relax, fmax=a.fmax, max_steps=a.max_steps),
     )
+    if a.seed_standoff is not None:
+        cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, seed_standoff=a.seed_standoff))
     if a.max_vacancy_sites:
         cfg = replace(cfg, slab=replace(cfg.slab, max_vacancy_sites=a.max_vacancy_sites))
     if a.supercell:
@@ -179,18 +191,20 @@ def main(a) -> None:
         return
 
     print("\nstarting — rerun this exact command to resume if it stops\n")
-    summaries = pipeline.run_batch(
+    pipeline.run_batch(
         materials, cfg=cfg, outdir=outdir, protocols=protocols,
         resume=True, continue_on_error=True,
     )
 
     index = json.loads((outdir / "batch.json").read_text())
+    print(f"\n{len(index['completed'])} of {len(RUTILES)} rutiles complete in {outdir}")
     if index.get("failed"):
         print(f"\n{len(index['failed'])} material(s) FAILED:")
         for m, err in index["failed"].items():
             print(f"   {m}: {err}")
         print("rerun the same command to retry only those")
-    _results_table(outdir, summaries)
+    _results_table(outdir, {m: pipeline._completed_in(outdir)[m]
+                            for m in index['completed']})
 
 
 if __name__ == "__main__":
@@ -205,6 +219,9 @@ if __name__ == "__main__":
                     help="adsorbate sites per position type; 0 = uncapped. Keeps sampling "
                          "density equal across materials (default: 6 -> 18 sites)")
     ap.add_argument("--max-vacancy-sites", type=int, help="cap the vacancy funnel too")
+    ap.add_argument("--seed-standoff", type=float, metavar="A",
+                    help=f"A added to the covalent bond length when placing the adsorbate "
+                         f"(default {base.adsorbate.seed_standoff})")
     ap.add_argument("--supercell", help='lateral slab replication as "nx,ny" (default 4,2 '
                                         '= 192 atoms). "1,1" = 24 atoms, for smoke tests only')
     ap.add_argument("--fmax", type=float, default=base.relax.fmax)

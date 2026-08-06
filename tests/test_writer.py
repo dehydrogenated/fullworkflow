@@ -241,6 +241,52 @@ def test_pipeline_builds_full_tree_with_fake_backend(tmp_path, monkeypatch):
     assert summary["total_elapsed_s"] > 0
 
 
+def test_rerun_resumes_completed_leaves(tmp_path, monkeypatch):
+    """A second run over a finished tree relaxes nothing and reproduces the same numbers.
+
+    This is the walltime-kill path: re-entering a run costs only what never finished.
+    """
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+
+    calls = []
+
+    def _counting_relax(structure, backend, relax_cell=False, **overrides):
+        calls.append(backend.name)
+        return _fake_relax(structure, backend, relax_cell=relax_cell, **overrides)
+
+    monkeypatch.setattr(pipeline, "relax", _counting_relax)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir, gas = tmp_path / "run", tmp_path / "gas"
+
+    first = pipeline.run(cfg, outdir=outdir, protocols=("full_pipeline",), gas_cache=gas)
+    assert calls, "first run must actually relax"
+
+    calls.clear()
+    second = pipeline.run(cfg, outdir=outdir, protocols=("full_pipeline",), gas_cache=gas)
+    assert calls == [], f"resumed run re-relaxed {len(calls)} structure(s)"
+
+    # Resume is a shortcut, not a different answer.
+    assert second["reference_min_e_ads"] == first["reference_min_e_ads"]
+    assert second["per_candidate"] == first["per_candidate"]
+
+    # A tightened force tolerance is a different question, so the cache must not answer it.
+    cfg_tight = RunConfig(
+        slab=SlabConfig(supercell=(1, 1)),
+        relax=RelaxConfig(fmax=cfg.relax.fmax / 10, max_steps=1),
+    )
+    calls.clear()
+    pipeline.run(cfg_tight, outdir=outdir, protocols=("full_pipeline",), gas_cache=gas)
+    assert calls, "a changed fmax must invalidate the cached leaves"
+
+
 # ---- material resolution + batch runner (no conda) --------------------------------------
 
 
@@ -318,7 +364,7 @@ def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
     import json
 
     index = json.loads((outdir / "batch.json").read_text())
-    assert index["materials"] == materials
+    assert index["completed"] == sorted(materials)
     assert index["total_elapsed_s"] == pytest.approx(
         sum(summaries[m]["total_elapsed_s"] for m in materials)
     )
@@ -578,3 +624,193 @@ def test_stage_rankings_file(tmp_path, monkeypatch):
         else:
             assert all(r["e_ads_eV"] == "" for r in rows)
             assert header["min_e_ads"] is None
+
+
+def test_vacancy_formation_energy_arithmetic():
+    from oxide_workflow.energetics import vacancy_formation_energy
+
+    # E_vac = E(defective) - E(pristine) + mu_O
+    assert vacancy_formation_energy(-166.94, -175.46, -4.95) == pytest.approx(3.57, abs=1e-9)
+    assert vacancy_formation_energy(None, -175.46, -4.95) is None
+    assert vacancy_formation_energy(-166.94, None, -4.95) is None
+    assert vacancy_formation_energy(-166.94, -175.46, None) is None
+
+
+def test_mu_o_is_half_the_o2_energy_regardless_of_adsorbate(tmp_path):
+    """The oxygen chemical potential must not depend on which adsorbate is configured."""
+    from dataclasses import replace
+
+    from oxide_workflow.backends import get_backend
+    from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig
+    from oxide_workflow.energetics import gas_reference_energy, oxygen_chemical_potential
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    backend = get_backend("MACE-mh1-omat")
+    o2_species, o2_coords = ADSORBATE_FRAGMENTS["O2"]
+
+    # a run whose adsorbate is CO still gets a real O2-derived mu_O
+    co_species, co_coords = ADSORBATE_FRAGMENTS["CO"]
+    cfg = RunConfig()
+    cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, species=co_species, coords=co_coords))
+
+    mu = oxygen_chemical_potential(backend, cfg, _fake_relax, cachedir=tmp_path)
+    e_o2 = gas_reference_energy(backend, cfg, _fake_relax, tmp_path,
+                                species=o2_species, coords=o2_coords)
+    assert mu == pytest.approx(e_o2 / 2)
+
+    # and it is NOT the CO reference
+    e_co = gas_reference_energy(backend, cfg, _fake_relax, cachedir=tmp_path)
+    assert mu != pytest.approx(e_co / 2)
+
+
+def test_e_vac_recorded_per_site(tmp_path, monkeypatch):
+    """Vacancy rows carry E_vac; adsorbate rows do not, and vice versa for E_ads."""
+    import csv
+    import json
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir = tmp_path / "evac"
+    summary = pipeline.run(cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+
+    rows = [
+        json.loads(ln)
+        for ln in (outdir / "candidates.jsonl").read_text().splitlines() if ln.strip()
+    ]
+    vac = [r for r in rows if r["stage"] == "vacancy"]
+    ads = [r for r in rows if r["stage"] == "adsorbate"]
+    assert vac and all(r["e_vac"] is not None for r in vac)
+    assert vac and all(r["e_ads"] is None for r in vac)
+    assert ads and all(r["e_vac"] is None for r in ads)   # undefined on the adsorbate stage
+    assert ads and all(r["e_ads"] is not None for r in ads)
+
+    # E_vac = E(defective) - E(pristine slab) + mu_O, all from the same model
+    sdir = outdir / cfg.reference
+    slab_header = (sdir / "slab" / "OUTCAR").read_text()
+    e_pristine = float(
+        next(l for l in slab_header.splitlines() if l.startswith("final_energy")).split(": ")[1]
+    )
+    gas = json.loads(next(iter((tmp_path / "gas").glob(f"gas_{cfg.reference}_OO*.json"))).read_text())
+    mu_o = gas["energy"] / 2
+    ranked = list(csv.DictReader((sdir / "vacancy" / "rankings.csv").open()))
+    for r in ranked:
+        assert float(r["e_vac_eV"]) == pytest.approx(
+            float(r["energy_eV"]) - e_pristine + mu_o, abs=1e-5
+        )
+        assert r["e_ads_eV"] == ""  # blank on the vacancy stage
+
+    # headline numbers reach the summary, with the mu_O convention recorded alongside
+    assert summary["reference_min_e_vac"] == pytest.approx(
+        min(float(r["e_vac_eV"]) for r in ranked), abs=1e-6
+    )
+    assert "O-rich" in summary["oxygen_reference"]
+    vh = json.loads((sdir / "vacancy" / "header.json").read_text())
+    assert vh["min_e_vac"] == pytest.approx(summary["reference_min_e_vac"], abs=1e-6)
+
+
+def test_batch_index_accumulates_across_one_at_a_time_runs(tmp_path, monkeypatch):
+    """Running materials one at a time into the same outdir must not clobber the index.
+
+    This is the normal way to work through a long sweep, so batch.json has to survey the
+    directory rather than record only the current invocation.
+    """
+    import json
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+    from oxide_workflow.structures import register_structure, rutile_tio2
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+    register_structure("mp-fake-a", rutile_tio2)
+    register_structure("mp-fake-b", rutile_tio2)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir = tmp_path / "one_by_one"
+
+    pipeline.run_batch(["mp-fake-a"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    first = json.loads((outdir / "batch.json").read_text())
+    assert first["completed"] == ["mp-fake-a"]
+
+    # a second, separate invocation for a different material, same outdir
+    pipeline.run_batch(["mp-fake-b"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    second = json.loads((outdir / "batch.json").read_text())
+    assert second["completed"] == ["mp-fake-a", "mp-fake-b"]   # the first is still there
+    assert second["requested_this_run"] == ["mp-fake-b"]
+    assert second["total_elapsed_s"] > first["total_elapsed_s"]
+    assert set(second["min_e_ads"]) == {"mp-fake-a", "mp-fake-b"}
+    assert set(second["min_e_vac"]) == {"mp-fake-a", "mp-fake-b"}
+
+
+def test_batch_index_drops_a_failure_once_it_succeeds(tmp_path, monkeypatch):
+    import json
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    outdir = tmp_path / "retry"
+
+    def boom(*a, **k):
+        raise RuntimeError("backend exploded")
+
+    monkeypatch.setattr(pipeline, "relax", boom)
+    pipeline.run_batch(["rutile-tio2"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    failed = json.loads((outdir / "batch.json").read_text())
+    assert "rutile-tio2" in failed["failed"] and failed["completed"] == []
+
+    # rerunning after the cause is fixed clears it
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+    pipeline.run_batch(["rutile-tio2"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    ok = json.loads((outdir / "batch.json").read_text())
+    assert ok["failed"] == {} and ok["completed"] == ["rutile-tio2"]
+
+
+def test_summary_is_self_describing_regardless_of_folder_name(tmp_path, monkeypatch):
+    """A run records what it actually is, so directory naming is purely cosmetic."""
+    import json
+    from dataclasses import replace
+
+    from oxide_workflow import pipeline
+    from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
+
+    global _FAKE_TRAJ
+    _FAKE_TRAJ = tmp_path / "traj_src.xyz"
+    _FAKE_TRAJ.write_text(
+        '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
+    )
+    monkeypatch.setattr(pipeline, "relax", _fake_relax)
+
+    cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
+    cfg = replace(cfg, polymorph="mp-825")
+    # folder deliberately named by formula, not by the identifier
+    outdir = tmp_path / "RuO2_whatever"
+    summary = pipeline.run(cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+
+    assert summary["polymorph"] == "mp-825"     # what you pass back to --material
+    assert summary["formula"] == "RuO2"         # what a human wants to read
+    assert summary["spacegroup"] == "P4_2/mnm"
+    header = json.loads((outdir / "header.json").read_text())
+    assert header["formula"] == "RuO2"

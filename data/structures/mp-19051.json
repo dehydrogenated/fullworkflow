@@ -1,0 +1,10 @@
+{
+  "identifier": "mp-19051",
+  "source": "materials-project",
+  "calc_type": "r2SCAN Structure Optimization",
+  "mp_database_version": "2026.04.13",
+  "added_utc": "2026-08-04T23:15:32+00:00",
+  "formula": "LaCoO3",
+  "n_sites": 20,
+  "spacegroup": "P-1"
+}

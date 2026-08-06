@@ -40,7 +40,11 @@ from pymatgen.core import Structure
 from oxide_workflow import pipeline
 from oxide_workflow.backends import REGISTRY, get_backend
 from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig
-from oxide_workflow.energetics import gas_reference_energy
+from oxide_workflow.energetics import (
+    OXYGEN_REFERENCE,
+    gas_reference_energy,
+    oxygen_chemical_potential,
+)
 from oxide_workflow.stages import adsorbate_candidates, make_slab, oxygen_vacancy_candidates
 from oxide_workflow.structures import get_structure
 
@@ -114,7 +118,8 @@ def main(a) -> None:
     # relax forward. One index does the whole thing.
     first = want if a.source else 0
     current = start
-    substrate_energy: float | None = None
+    substrate_energy: float | None = None   # bare vacancy slab, for E_ads
+    pristine_energy: float | None = None    # pristine slab, for E_vac
 
     outdir.mkdir(parents=True, exist_ok=True)
     cand_table = outdir / "candidates.jsonl"
@@ -141,9 +146,17 @@ def main(a) -> None:
         elif stage == "slab":
             slab_in = make_slab(current, cfg.slab)
             print(f"  slab built     {len(slab_in)} atoms")
-            current = _relax_one(slab_in, "slab", "cut_from_relaxed_bulk").structure
+            slab_out = _relax_one(slab_in, "slab", "cut_from_relaxed_bulk")
+            pristine_energy = slab_out.energy  # E_vac reference for the next stage
+            current = slab_out.structure
 
         elif stage == "vacancy":
+            if pristine_energy is None:
+                # Entered directly via --from: the slab came off disk with no energy, and
+                # E_vac needs THIS model's pristine-slab energy for the same geometry.
+                pristine = _relax_one(current, "pristine_slab", "pristine_reference_state")
+                pristine_energy = pristine.energy
+            mu_o = oxygen_chemical_potential(backend, cfg, pipeline.relax)
             vacs = oxygen_vacancy_candidates(
                 current, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites
             )
@@ -152,10 +165,12 @@ def main(a) -> None:
                 vacs, backend, stage="vacancy", protocol="reference",
                 geometry_source="from_relaxed_slab", cfg=cfg, outdir=outdir,
                 candidates_table=cand_table,
+                e_vac_reference=(pristine_energy, mu_o),
             )
             best = min(out, key=lambda si: out[si].energy)
             print(f"  best vacancy   site{best} ({out[best].site_id['symmetry_class']})  "
                   f"E={out[best].energy:.4f} eV")
+            print(f"  min E_vac      {out[best].e_vac:+.4f} eV  [{OXYGEN_REFERENCE}]")
             print(f"  rankings       {outdir / backend.name / 'vacancy' / 'rankings.csv'}")
             current = out[best].structure
             # The winner's energy IS this model's bare-substrate energy for the next stage.

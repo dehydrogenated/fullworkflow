@@ -46,7 +46,10 @@ def print_header(rundir: Path, summary: dict, div: list) -> None:
         print("(no summary.json — run still in progress; reporting partial tables)\n")
         return
     mins = summary.get("total_elapsed_s", 0) / 60
-    print(f"material    {summary.get('polymorph')}   facet {summary.get('facet')}")
+    ident = summary.get("polymorph")
+    formula = summary.get("formula")
+    print(f"material    {formula + ' (' + str(ident) + ')' if formula else ident}"
+          f"   facet {summary.get('facet')}")
     print(f"reference   {summary.get('reference')}")
     print(f"candidates  {', '.join(summary.get('candidates', []))}")
     print(f"wall time   {mins:.1f} min")
@@ -84,7 +87,9 @@ def _winners(cands: list) -> dict:
     out = {}
     for key, rows in groups.items():
         best = min(rows, key=lambda r: r["energy"])
-        out[key] = (best["site_index"], best["energy"], len(rows), best.get("e_ads"))
+        # E_ads on the adsorbate stage, E_vac on the vacancy stage; only one is ever set.
+        derived = best.get("e_ads") if best.get("e_ads") is not None else best.get("e_vac")
+        out[key] = (best["site_index"], best["energy"], len(rows), derived)
     return out
 
 
@@ -103,13 +108,15 @@ def print_sites(summary: dict, cands: list) -> None:
             continue
         ref_key = next((k for k in keys if k[2] == "reference"), None)
         ref_site = wins[ref_key][0] if ref_key else None
+        # The derived energy is the comparable number across models and materials (the
+        # per-atom reference offset cancels); the raw total is not. E_ads on the adsorbate
+        # stage, E_vac (formation energy, lower = easier) on the vacancy stage.
+        label = "E_vac eV" if stage == "vacancy" else "E_ads eV"
         print(f"\n[{stage}]")
-        # E_ads is the comparable number across models (the per-atom reference offset
-        # cancels); the raw total is not. Blank on the vacancy stage, where it's undefined.
         print(f"  {'model':18s}{'protocol':15s}{'best site':>10s}{'n sites':>9s}"
-              f"{'energy eV':>13s}{'E_ads eV':>11s}  vs reference")
+              f"{'energy eV':>13s}{label:>11s}  vs reference")
         for k in keys:
-            site, energy, n, e_ads = wins[k]
+            site, energy, n, derived = wins[k]
             if k[2] == "reference":
                 verdict = "(reference)"
             elif ref_site is None:
@@ -117,7 +124,7 @@ def print_sites(summary: dict, cands: list) -> None:
             else:
                 verdict = "SAME site" if site == ref_site else f"DIFFERENT (ref picked {ref_site})"
             print(f"  {k[1]:18s}{k[2]:15s}{site:>10d}{n:>9d}{energy:>13.4f}"
-                  f"{_num(e_ads, 11, 3)}  {verdict}")
+                  f"{_num(derived, 11, 3)}  {verdict}")
 
         # Ranking margin: how decisively the reference preferred its winner. A margin
         # smaller than the models' mutual energy error means the ranking is not resolved.
@@ -211,9 +218,62 @@ def plot(rundir: Path, summary: dict, div: list, cands: list) -> Path | None:
     return path
 
 
+def _collection(rundir: Path) -> list[tuple[str, dict]]:
+    """(name, summary) for each completed run directly under ``rundir``, if it holds runs.
+
+    Lets one directory of per-material runs be reported as a set, however they were
+    produced — whether by run_family.py's batch mode or by invoking the pipeline once per
+    material into sibling directories, which is the same thing on disk.
+    """
+    if (rundir / "summary.json").exists():
+        return []  # a single run, not a collection
+    out = []
+    for sub in sorted(p for p in rundir.iterdir() if p.is_dir()):
+        path = sub / "summary.json"
+        if path.exists():
+            try:
+                out.append((sub.name, json.loads(path.read_text())))
+            except json.JSONDecodeError:
+                pass
+    return out
+
+
+def print_collection(rundir: Path, runs: list[tuple[str, dict]]) -> None:
+    """Cross-material headline table: the comparable energies, side by side.
+
+    Raw total energies are not comparable between materials (different compositions
+    entirely); E_ads and E_vac are, which is the whole reason they exist.
+    """
+    print(f"\n{'=' * 78}\nCOLLECTION  {rundir}   ({len(runs)} run(s))\n{'=' * 78}")
+    ref = runs[0][1].get("reference", "?")
+    oxy = next((s.get("oxygen_reference") for _, s in runs if s.get("oxygen_reference")), None)
+    print(f"reference   {ref}")
+    if oxy:
+        print(f"oxygen ref  {oxy}")
+    # Sorted by formula: what you actually want to scan down. The identifier is kept
+    # beside it because a formula is not a unique identity (rutile and anatase are both
+    # TiO2) — and because it is what you pass back to --material.
+    print(f"\n{'formula':10s}{'material':12s}{'ads':9s}{'facet':7s}"
+          f"{'min E_ads':>11s}{'min E_vac':>11s}{'hours':>8s}   run dir")
+    for name, s in sorted(runs, key=lambda r: (r[1].get("formula") or "", r[0])):
+        f = lambda v: f"{v:+.3f}" if isinstance(v, (int, float)) else "-"
+        print(f"{str(s.get('formula') or '?'):10s}{str(s.get('polymorph')):12s}"
+              f"{str(s.get('adsorbate')):9s}{str(s.get('facet')):7s}"
+              f"{f(s.get('reference_min_e_ads')):>11s}{f(s.get('reference_min_e_vac')):>11s}"
+              f"{s.get('total_elapsed_s', 0) / 3600:>8.1f}   {name}")
+    print("\nE_ads and E_vac are comparable across materials; raw total energies are not.")
+    print(f"per-run detail:  python scripts/report.py {rundir}/<run>\n")
+
+
 def main(rundir: Path, do_plot: bool) -> None:
     if not rundir.is_dir():
         raise SystemExit(f"not a run directory: {rundir}")
+
+    runs = _collection(rundir)
+    if runs:
+        print_collection(rundir, runs)
+        return
+
     summary, div, cands = _load(rundir)
 
     print_header(rundir, summary, div)

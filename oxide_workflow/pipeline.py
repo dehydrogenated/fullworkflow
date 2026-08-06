@@ -1,5 +1,79 @@
 """Pipeline orchestration — the glue around tested parts (design §7 step 5).
 
+Running it
+==========
+
+    python -m oxide_workflow.pipeline --material mp-825 --adsorbate O2 --max-sites 6 \\
+        --outdir runs/rutile_O2/mp-825
+
+One material per invocation. Add ``--help`` for the full flag list.
+
+Where the settings come from
+----------------------------
+Every knob lives in ``config.py`` as a frozen dataclass (``SlabConfig``, ``RelaxConfig``,
+``AdsorbateConfig``, all held by ``RunConfig``). The CLI builds a default ``RunConfig``
+and then applies ``dataclasses.replace`` for each flag you passed — see the ``__main__``
+block at the bottom of this file, which is the whole override mechanism.
+
+So there are exactly two ways to change a run, and the flag always wins:
+
+    edit config.py   ->  new default for every run from now on
+    pass a flag      ->  applies to this run only
+
+Nothing else needs editing. If a flag exists for a setting, prefer it; editing the file
+is for changing what "default" means.
+
+The flags
+---------
+material and models
+    --material      mp-id, built-in alias, or a path to your own CIF/POSCAR
+                    (default: RunConfig.polymorph, "rutile-tio2")
+    --candidates    model(s) to benchmark, space-separated (default: RunConfig.candidate)
+    --protocol      full_pipeline | seeded | both (default: full_pipeline)
+
+slab geometry -> SlabConfig
+    --miller        facet, "110" or "1,1,-1" (default 110)
+    --termination   which termination of that facet (default 1)
+    --thickness     min slab thickness in A (default 12) — the layer-count knob
+    --vacuum        min vacuum gap in A (default 12)
+    --supercell     lateral replication "nx,ny" (default 4,2 = 192 atoms; 1,1 = 24)
+    --freeze        fraction of the slab held at bulk positions (default 0.5)
+
+screening
+    --adsorbate         H | CO | H2O | O2 | O2-side | O (default: AdsorbateConfig pins H)
+    --max-sites         adsorbate sites kept per position type (default: all)
+    --max-vacancy-sites cap the vacancy funnel (default: all) — smoke tests only
+
+relaxation -> RelaxConfig
+    --fmax          force convergence, eV/A (default 0.02)
+    --max-steps     optimizer step cap (default 300)
+
+    --outdir        where the run tree goes (default runs/latest)
+
+Worked examples
+---------------
+    # thicker slab, 80% frozen, on a different facet
+    python -m oxide_workflow.pipeline --miller 101 --thickness 20 --freeze 0.8
+
+    # two candidates against the reference, both protocols
+    python -m oxide_workflow.pipeline --candidates MACE-mh1-oc20 UMA-oc22 --protocol both
+
+    # fast smoke check that a material runs at all (numbers NOT usable)
+    python -m oxide_workflow.pipeline --material mp-856 --supercell 1,1 \\
+        --max-sites 1 --max-vacancy-sites 2 --fmax 0.2 --max-steps 20
+
+Reading the result
+------------------
+    python scripts/report.py runs/rutile_O2/mp-825     # one run, per-stage detail
+    python scripts/report.py runs/rutile_O2            # a directory of runs, compared
+
+Related entry points: ``scripts/run_stage.py`` runs a single stage (and can start from a
+structure file, skipping everything before it); ``scripts/run_family.py`` wraps
+``run_batch`` for unattended multi-material sweeps with cost estimates and resume.
+
+What it does
+============
+
 Runs the pseudo-reference plumbing test: the reference backend generates the full
 relaxed chain (bulk → slab → vacancy → adsorbate) stage by stage; the candidate backend
 then runs the same chain under one or both protocols (selected via ``protocols=`` /
@@ -34,13 +108,21 @@ from .backends import Backend, RelaxResult, get_backend, relax
 from .checks import placement_quality_flags
 from .config import ADSORBATE_FRAGMENTS, RunConfig
 from .diverge import diverge
-from .energetics import GAS_CACHE_DIR, adsorption_energy, gas_reference_energy
+from .energetics import (
+    GAS_CACHE_DIR,
+    adsorption_energy,
+    gas_reference_energy,
+    OXYGEN_REFERENCE,
+    oxygen_chemical_potential,
+    vacancy_formation_energy,
+)
 from .records import (
     DivergenceRecord,
     OUTCAR_NAME,
     append_divergence,
     format_outcar,
     leaf_dir,
+    read_relaxation,
     relax_subfolder_name,
     stage_dir,
     write_header,
@@ -49,7 +131,7 @@ from .records import (
 )
 from .records import _sanitize
 from .stages import adsorbate_candidates, make_slab, oxygen_vacancy_candidates
-from .structures import get_structure
+from .structures import get_structure, structure_provenance
 
 
 @dataclass
@@ -60,6 +142,7 @@ class StageOutput:
     energy: float
     start_fmax: float
     e_ads: float | None = None  # adsorbate stage only; None elsewhere
+    e_vac: float | None = None  # vacancy stage only; None elsewhere
     site_id: dict | None = None
     # --- tree + rollup bookkeeping (populated by _relax_record) ---
     elapsed_s: float = 0.0
@@ -72,6 +155,18 @@ class StageOutput:
     canonical: bool = False
     geometry_source: str = ""
     flags: list[str] = field(default_factory=list)
+
+
+def _provenance(cfg: RunConfig) -> dict:
+    """What ``cfg.polymorph`` resolved to (formula, spacegroup, source).
+
+    Best-effort: a run must never die at the final write-out because a provenance lookup
+    failed, so an unresolvable identifier just yields empty labels.
+    """
+    try:
+        return structure_provenance(cfg.polymorph)
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def _facet(cfg: RunConfig, stage: str) -> str:
@@ -136,6 +231,7 @@ def _relax_header(
     geometry_source: str,
     adsorbate_max_disp: float | None,
     e_ads: float | None,
+    e_vac: float | None,
     flags: list[str],
 ) -> dict:
     """Leaf-scope header dict: everything the OUTCAR summary block reports (design §5)."""
@@ -147,10 +243,16 @@ def _relax_header(
         "facet": facet,
         "composition": res.structure.composition.reduced_formula,
         "site": site,
+        # What the site IS chemically (Ti5c, O2c, ...), as opposed to where its folder is.
+        # This is the form to compare against literature.
+        "site_label": (site_id or {}).get("site_label") or None,
         "site_id": site_id,
         "canonical": canonical,
         "optimizer": cfg.relax.optimizer,
         "fmax_target": cfg.relax.fmax,
+        # Not rendered into the OUTCAR block; carried so a resumed leaf can tell whether it
+        # stopped because it converged or because it ran out of the *then-current* budget.
+        "max_steps": cfg.relax.max_steps,
         "converged": res.converged,
         "nsteps": res.nsteps,
         "n_frames": res.meta.get("n_frames"),
@@ -158,11 +260,65 @@ def _relax_header(
         "start_fmax": res.start_fmax,
         "energy": res.energy,
         "e_ads": e_ads,
+        "e_vac": e_vac,
         "fmax": res.fmax,
         "geometry_source": geometry_source,
         "adsorbate_max_disp": adsorbate_max_disp,
         "flags": flags,
     }
+
+
+def _same_input(a, b, tol: float = 1e-3) -> bool:
+    """Are two structures the same stage input, to POSCAR round-trip precision?
+
+    Periodic-aware (an atom at frac 0.999 and one at -0.001 are the same atom) and tolerant
+    of the six decimals POSCAR keeps, which is ~1e-5 Å — far inside ``tol``.
+    """
+    if len(a) != len(b):
+        return False
+    if [s.species_string for s in a] != [s.species_string for s in b]:
+        return False
+    if not np.allclose(a.lattice.matrix, b.lattice.matrix, atol=tol):
+        return False
+    d = a.frac_coords - b.frac_coords
+    d -= np.round(d)  # nearest periodic image, so wrap-around is not a difference
+    return bool(np.abs(d @ a.lattice.matrix).max() < tol)
+
+
+def _resume(leaf: Path, structure, cfg: RunConfig) -> dict | None:
+    """A completed leaf that answers *this* question, or ``None`` to relax it again.
+
+    Sweep-level resume: a walltime kill or a Ctrl-C leaves a run part-way through its
+    hundreds of relaxations, and re-entering it should cost only the ones that never
+    finished. MLIP relaxation is deterministic, so a cached leaf is not an approximation of
+    the answer — it *is* the answer, and reusing it is free.
+
+    That only holds while the question is unchanged, so a leaf is reused only if all three
+    agree with the current run:
+
+    1. it is complete (``read_relaxation`` returns something at all);
+    2. its recorded stage input matches the structure about to be relaxed — this is the
+       guard that matters, because it catches a changed supercell, facet, or adsorbate, and
+       any upstream geometry that shifted, without needing to enumerate those cases;
+    3. the relaxation settings match, and it did not stop early against a step cap that has
+       since been raised.
+
+    Any mismatch re-relaxes and overwrites, so a rerun into an existing directory converges
+    on results consistent with the current config rather than silently mixing settings.
+    """
+    cached = read_relaxation(leaf)
+    if cached is None:
+        return None
+    h = cached["header"]
+    if h.get("fmax_target") != cfg.relax.fmax or h.get("optimizer") != cfg.relax.optimizer:
+        return None
+    # Unconverged against a cap that has since been raised: the extra budget is exactly
+    # what this leaf was short of, so redo it rather than inheriting a truncated answer.
+    if not h.get("converged") and cfg.relax.max_steps > (h.get("max_steps") or 0):
+        return None
+    if not _same_input(cached["initial"], structure):
+        return None
+    return cached
 
 
 def _relax_record(
@@ -178,6 +334,7 @@ def _relax_record(
     site_id: dict | None = None,
     canonical: bool = False,
     e_ads_reference: tuple[float, float] | None = None,
+    e_vac_reference: tuple[float, float] | None = None,
 ) -> StageOutput:
     """Relax one structure and write its leaf folder (POSCAR/CONTCAR/trajectory/OUTCAR).
 
@@ -185,9 +342,56 @@ def _relax_record(
     optimizer log so a multi-candidate funnel can flip ``canonical`` on the winner later.
 
     ``e_ads_reference`` is the ``(bare substrate, isolated fragment)`` energy pair for the
-    adsorbate stage, both from *this* backend; supplying it records E_ads alongside the
-    total energy. Omit it on every other stage, where E_ads is undefined.
+    adsorbate stage, and ``e_vac_reference`` the ``(pristine slab, mu_O)`` pair for the
+    vacancy stage — both from *this* backend. Supplying one records the corresponding
+    derived energy alongside the total. Omit them on stages where they are undefined.
+
+    Every relaxation in the pipeline passes through here, so this is also where resume
+    lives: a leaf already on disk that answers the same question is loaded instead of
+    recomputed (see ``_resume``).
     """
+    sdir = stage_dir(outdir, backend.name, protocol, stage)
+    leaf = leaf_dir(sdir, stage, site_id)
+
+    def _derived(energy: float) -> tuple[float | None, float | None]:
+        """``(E_ads, E_vac)``, each None on the stage where it is undefined."""
+        return (
+            adsorption_energy(energy, *e_ads_reference) if e_ads_reference is not None else None,
+            vacancy_formation_energy(energy, *e_vac_reference) if e_vac_reference is not None else None,
+        )
+
+    cached = _resume(leaf, structure, cfg)
+    if cached is not None:
+        # Re-derive E_ads/E_vac rather than trusting the cached numbers: their reference
+        # terms come from this run's own chain, so deriving them here keeps a resumed leaf
+        # on exactly the same footing as a freshly relaxed one.
+        header = dict(cached["header"])
+        header["e_ads"], header["e_vac"] = _derived(header["energy"])
+        header["canonical"] = canonical
+        opt_log = cached["opt_log"]
+        write_relaxation(
+            leaf, initial=cached["initial"], final=cached["final"],
+            trajectory_src=None, header=header, opt_log=opt_log,
+        )
+        return StageOutput(
+            structure=cached["final"],
+            energy=header["energy"],
+            start_fmax=header["start_fmax"],
+            e_ads=header["e_ads"],
+            e_vac=header["e_vac"],
+            site_id=site_id,
+            elapsed_s=header.get("elapsed_s") or 0.0,
+            model=backend.name,
+            protocol=protocol,
+            stage=stage,
+            leaf=leaf,
+            header=header,
+            opt_log=opt_log,
+            canonical=canonical,
+            geometry_source=geometry_source,
+            flags=header.get("flags") or [],
+        )
+
     res = relax(
         structure,
         backend,
@@ -217,18 +421,12 @@ def _relax_record(
         start_ads_distance=start_ads_distance,
         ads_bond_length=ads_bond_length,
     )
-    e_ads = (
-        adsorption_energy(res.energy, *e_ads_reference)
-        if e_ads_reference is not None
-        else None
-    )
-    sdir = stage_dir(outdir, backend.name, protocol, stage)
-    leaf = leaf_dir(sdir, stage, site_id)
+    e_ads, e_vac = _derived(res.energy)
     header = _relax_header(
         res, backend, cfg,
         stage=stage, protocol=protocol, facet=_facet(cfg, stage),
         site_id=site_id, canonical=canonical, geometry_source=geometry_source,
-        adsorbate_max_disp=ads_max_disp, e_ads=e_ads, flags=flags,
+        adsorbate_max_disp=ads_max_disp, e_ads=e_ads, e_vac=e_vac, flags=flags,
     )
     opt_log = res.meta.get("opt_log", "")
     write_relaxation(
@@ -239,11 +437,17 @@ def _relax_record(
         header=header,
         opt_log=opt_log,
     )
+    # Propagate the geometry as it landed on disk, not the in-memory original. A resumed
+    # run can only ever see the disk copy, so reading it back here is what makes the two
+    # chains bit-identical — and downstream stage builders are sensitive enough to their
+    # input object that "numerically equal" is not enough (see _resume).
+    final = read_relaxation(leaf)["final"]
     return StageOutput(
-        structure=res.structure,
+        structure=final,
         energy=res.energy,
         start_fmax=res.start_fmax,
         e_ads=e_ads,
+        e_vac=e_vac,
         site_id=site_id,
         elapsed_s=res.meta.get("elapsed_s") or 0.0,
         model=backend.name,
@@ -260,7 +464,7 @@ def _relax_record(
 
 def _record_candidate_energy(
     path: Path, *, stage: str, model: str, protocol: str, site_id: dict, energy: float,
-    e_ads: float | None = None,
+    e_ads: float | None = None, e_vac: float | None = None,
 ) -> None:
     with path.open("a") as f:
         f.write(
@@ -270,10 +474,13 @@ def _record_candidate_energy(
                     "model": model,
                     "protocol": protocol,
                     "symmetry_class": site_id["symmetry_class"],
+                    "site_label": site_id.get("site_label", ""),
                     "site_index": site_id["site_index"],
                     "energy": energy,
-                    # None on the vacancy stage, where E_ads is undefined.
+                    # Each is None on the stage where it is undefined: E_ads on vacancy
+                    # rows, E_vac on adsorbate rows.
                     "e_ads": e_ads,
+                    "e_vac": e_vac,
                 }
             )
             + "\n"
@@ -289,9 +496,11 @@ def _ranking_rows(ranked: list[StageOutput], stage: str) -> list[dict]:
             "folder": relax_subfolder_name(stage, o.site_id),
             "site_index": o.site_id["site_index"],
             "symmetry_class": o.site_id["symmetry_class"],
+            "site_label": o.site_id.get("site_label", ""),
             "energy_eV": round(o.energy, 6),
             "dE_from_min_eV": round(o.energy - emin, 6),
             "e_ads_eV": None if o.e_ads is None else round(o.e_ads, 6),
+            "e_vac_eV": None if o.e_vac is None else round(o.e_vac, 6),
             "converged": o.header.get("converged"),
             "nsteps": o.header.get("nsteps"),
             "flags": "; ".join(o.flags),
@@ -311,6 +520,7 @@ def _run_funnel(
     outdir: Path,
     candidates_table: Path,
     e_ads_reference: tuple[float, float] | None = None,
+    e_vac_reference: tuple[float, float] | None = None,
 ) -> dict[int, StageOutput]:
     """Relax ALL decorate() candidates for one stage → record each. Returns per-site outputs.
 
@@ -321,9 +531,10 @@ def _run_funnel(
     relax, the min-energy one is flagged ``canonical`` (its OUTCAR rewritten) and a
     stage-scope ``header.json`` is written.
 
-    ``e_ads_reference`` (adsorbate stage only) turns on E_ads recording; see
-    ``_relax_record``. Site selection is unaffected by it — E_ads differs from the total
-    energy by a constant within one funnel, so ranking by either picks the same winner.
+    ``e_ads_reference`` (adsorbate stage) and ``e_vac_reference`` (vacancy stage) turn on
+    the derived-energy columns; see ``_relax_record``. Site selection is unaffected by
+    either — both differ from the total energy by a constant within one funnel, so ranking
+    by any of the three picks the same winner.
     """
     outputs: dict[int, StageOutput] = {}
     for cand in candidates:
@@ -339,6 +550,7 @@ def _run_funnel(
             relax_cell=False,
             site_id=cand.site_id,
             e_ads_reference=e_ads_reference,
+            e_vac_reference=e_vac_reference,
         )
         _record_candidate_energy(
             candidates_table,
@@ -348,6 +560,7 @@ def _run_funnel(
             site_id=cand.site_id,
             energy=out.energy,
             e_ads=out.e_ads,
+            e_vac=out.e_vac,
         )
         outputs[si] = out
 
@@ -376,6 +589,9 @@ def _run_funnel(
             # The headline number for the adsorbate stage: the winning site's binding
             # energy. None on the vacancy stage.
             "min_e_ads": None if winner.e_ads is None else round(winner.e_ads, 6),
+            # Lowest vacancy formation energy = the most easily formed vacancy.
+            "min_e_vac": None if winner.e_vac is None else round(winner.e_vac, 6),
+            "oxygen_reference": OXYGEN_REFERENCE if winner.e_vac is not None else None,
             "margin_to_runner_up_eV": margin,
         },
     )
@@ -481,6 +697,7 @@ def _write_tree_headers(outdir: Path, cfg: RunConfig, all_outs: list[StageOutput
 
     total_elapsed = round(sum(o.elapsed_s for o in all_outs), 3)
     candidates = [m for m in by_model if m != cfg.reference]  # every non-reference model
+    provenance = _provenance(cfg)
     write_header(outdir, {
         "run_id": Path(outdir).name,
         "reference": cfg.reference,
@@ -488,6 +705,8 @@ def _write_tree_headers(outdir: Path, cfg: RunConfig, all_outs: list[StageOutput
         "models": [cfg.reference, *candidates],
         "facet": "".join(map(str, cfg.slab.miller_index)),
         "polymorph": cfg.polymorph,
+        "formula": provenance.get("formula", ""),
+        "spacegroup": provenance.get("spacegroup", ""),
         "total_elapsed_s": total_elapsed,
         "elapsed_by_model": elapsed_by_model,
     })
@@ -541,10 +760,15 @@ def _run_reference_chain(
     )
     outs.append(ref_slab)
 
+    # E_vac reference state: this model's own relaxed pristine slab (already in hand —
+    # it is the very slab the vacancies are cut from) plus the oxygen chemical potential.
+    mu_o = oxygen_chemical_potential(ref, cfg, relax, cachedir=gas_cache)
+
     ref_vac = _run_funnel(
         oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, max_sites=cfg.slab.max_vacancy_sites), ref, stage="vacancy",
         protocol="reference", geometry_source="cut_from_relaxed_slab", cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
+        e_vac_reference=(ref_slab.energy, mu_o),
     )
     outs.extend(ref_vac.values())
     canonical_site = min(ref_vac, key=lambda si: ref_vac[si].energy)  # min-energy vacancy
@@ -601,7 +825,7 @@ _GEOMETRY_SOURCES = {
 def _run_protocol_chain(
     cand: Backend, rc: ReferenceChain, cfg: RunConfig, outdir: Path,
     div_table: Path, cand_table: Path, *, protocol: str, cand_bulk: StageOutput,
-    e_gas: float,
+    e_gas: float, mu_o: float,
 ) -> tuple[list[StageOutput], dict[str, int]]:
     """Run ONE protocol's slab -> vacancy -> adsorbate chain for one candidate.
 
@@ -634,12 +858,33 @@ def _run_protocol_chain(
     outs.append(c_slab)
     _emit(div_table, rc.slab, c_slab, stage="slab", model=cand.name, protocol=protocol, cfg=cfg)
 
-    # ---- vacancy funnel --------------------------------------------------------------
+    # ---- E_vac reference state (pristine slab, from THIS backend) --------------------
+    # Same same-calculator rule as E_ads: the pristine term must be this model's energy
+    # for the exact slab the vacancies were cut from.
+    #
+    # full_pipeline cuts them from its own relaxed slab, so c_slab.energy is already the
+    # right number and costs nothing. seeded cuts them from the REFERENCE's relaxed slab,
+    # which this model has never evaluated — c_slab above is its relaxation of a slab cut
+    # from the reference's *bulk*, a different geometry — so relax the reference slab once
+    # here. One slab relaxation against one per site in the funnel below.
     vac_substrate = rc.slab.structure if seeded else c_slab.structure
+    if seeded:
+        pristine = _relax_record(
+            vac_substrate, cand, stage="pristine_slab", protocol=protocol,
+            geometry_source="reference_slab", cfg=cfg, outdir=outdir,
+            relax_cell=False, canonical=True,
+        )
+        outs.append(pristine)
+        e_pristine = pristine.energy
+    else:
+        e_pristine = c_slab.energy
+
+    # ---- vacancy funnel --------------------------------------------------------------
     c_vac = _run_funnel(
         oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites), cand,
         stage="vacancy", protocol=protocol, geometry_source=src["vacancy"], cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
+        e_vac_reference=(e_pristine, mu_o),
     )
     outs.extend(c_vac.values())
     own_vac = min(c_vac, key=lambda si: c_vac[si].energy)  # this protocol's own min
@@ -717,12 +962,13 @@ def _run_candidate_chain(
     # This model's own isolated-fragment energy — shared by every protocol, and cached
     # across runs, so it is computed at most once per (model, fragment, fmax).
     e_gas = gas_reference_energy(cand, cfg, relax, cachedir=gas_cache)
+    mu_o = oxygen_chemical_potential(cand, cfg, relax, cachedir=gas_cache)
 
     sites: dict[str, dict[str, int]] = {}
     for protocol in protocols:
         chain_outs, chain_sites = _run_protocol_chain(
             cand, rc, cfg, outdir, div_table, cand_table,
-            protocol=protocol, cand_bulk=cand_bulk, e_gas=e_gas,
+            protocol=protocol, cand_bulk=cand_bulk, e_gas=e_gas, mu_o=mu_o,
         )
         outs.extend(chain_outs)
         sites[protocol] = chain_sites
@@ -757,17 +1003,22 @@ def _fragment_label(acfg) -> str:
     return "".join(s if n == 1 else f"{s}{n}" for s, n in counts.items())
 
 
-def _min_e_ads(outs: list[StageOutput]) -> dict[str, float]:
-    """protocol -> the lowest (most strongly bound) E_ads found on the adsorbate stage.
+def _min_metric(outs: list[StageOutput], stage: str, attr: str) -> dict[str, float]:
+    """protocol -> the lowest value of ``attr`` found on ``stage``.
 
-    The headline result of a run: the minimum adsorption energy over all sampled sites.
+    The two headline results of a run: the minimum adsorption energy over all sampled
+    adsorption sites, and the minimum vacancy formation energy over all vacancy sites
+    (the most easily formed vacancy).
     """
     best: dict[str, float] = {}
     for o in outs:
-        if o.stage != "adsorbate" or o.e_ads is None:
+        if o.stage != stage:
             continue
-        if o.protocol not in best or o.e_ads < best[o.protocol]:
-            best[o.protocol] = round(o.e_ads, 6)
+        v = getattr(o, attr)
+        if v is None:
+            continue
+        if o.protocol not in best or v < best[o.protocol]:
+            best[o.protocol] = round(v, 6)
     return best
 
 
@@ -836,22 +1087,36 @@ def run_sweep(
             get_backend(name), rc, cfg, outdir, div_table, cand_table, protocols, gas_cache
         )
         all_outs.extend(cc.outputs)
-        per_candidate[name] = {"sites": cc.sites, "min_e_ads": _min_e_ads(cc.outputs)}
+        per_candidate[name] = {
+            "sites": cc.sites,
+            "min_e_ads": _min_metric(cc.outputs, "adsorbate", "e_ads"),
+            "min_e_vac": _min_metric(cc.outputs, "vacancy", "e_vac"),
+        }
 
     # ---- Header rollups over the whole tree (timing, canonical pointers) --------------
     total_elapsed_s = _write_tree_headers(outdir, cfg, all_outs)
 
+    provenance = _provenance(cfg)
     summary = {
         "reference": cfg.reference,
         "candidates": candidates,
         "protocols": list(protocols),
         "facet": "".join(map(str, cfg.slab.miller_index)),
         "polymorph": cfg.polymorph,
+        # What the identifier actually resolved to. Recorded so a run is self-describing
+        # no matter what its directory is called — folder names are for humans, this is
+        # the ground truth. Formula alone is not a unique identity (rutile and anatase are
+        # both TiO2), which is why the mp-id stays alongside it.
+        "formula": provenance.get("formula", ""),
+        "spacegroup": provenance.get("spacegroup", ""),
         "reference_canonical_vacancy_site": rc.canonical_site,
         "reference_canonical_adsorbate_site": rc.ads_canonical,
         "adsorbate": _fragment_label(cfg.adsorbate),
         # The headline result: lowest E_ads over all sampled sites (eV, negative = bound).
-        "reference_min_e_ads": _min_e_ads(rc.outputs).get("reference"),
+        "reference_min_e_ads": _min_metric(rc.outputs, "adsorbate", "e_ads").get("reference"),
+        # Lowest oxygen vacancy formation energy = the most easily formed vacancy.
+        "reference_min_e_vac": _min_metric(rc.outputs, "vacancy", "e_vac").get("reference"),
+        "oxygen_reference": OXYGEN_REFERENCE,
         "n_vacancy_sites": len(rc.vac),
         "n_adsorbate_sites": len(rc.ads),
         "per_candidate": per_candidate,
@@ -861,6 +1126,67 @@ def run_sweep(
     }
     (outdir / "summary.json").write_text(json.dumps(summary, indent=2))
     return summary
+
+
+def _completed_in(outdir: Path) -> dict[str, dict]:
+    """Every material with a finished ``summary.json`` under ``outdir``, keyed by identifier.
+
+    Read back from disk rather than tracked in memory so the index reflects the whole
+    batch directory, not just the current invocation.
+    """
+    found: dict[str, dict] = {}
+    if not outdir.is_dir():
+        return found
+    for sub in sorted(outdir.iterdir()):
+        path = sub / "summary.json"
+        if not (sub.is_dir() and path.exists()):
+            continue
+        try:
+            s = json.loads(path.read_text())
+        except json.JSONDecodeError:
+            continue  # a run killed mid-write; the material simply reads as not done
+        found[s.get("polymorph") or sub.name] = s
+    return found
+
+
+def _write_batch_index(
+    outdir: Path, cfg: RunConfig, protocols, requested, failures: dict[str, str]
+) -> dict:
+    """Write ``batch.json`` describing every material in the directory.
+
+    Deliberately a directory survey rather than a record of this invocation. Running one
+    material at a time into the same ``--outdir`` is a normal way to work through a sweep —
+    it keeps each run short and lets results accumulate — and an index built only from the
+    current call would erase the record of every earlier one.
+
+    Failures carry over the same way: a material that failed before and is not now complete
+    stays listed, and one that has since succeeded drops off.
+    """
+    done = _completed_in(outdir)
+    previous = {}
+    index_path = outdir / "batch.json"
+    if index_path.exists():
+        try:
+            previous = json.loads(index_path.read_text()).get("failed", {})
+        except json.JSONDecodeError:
+            previous = {}
+    still_failing = {m: e for m, e in {**previous, **failures}.items() if m not in done}
+
+    index = {
+        "reference": cfg.reference,
+        "candidate": cfg.candidate,
+        "protocols": list(_check_protocols(protocols)),
+        "adsorbate": _fragment_label(cfg.adsorbate),
+        "requested_this_run": list(requested),
+        "completed": sorted(done),
+        "failed": still_failing,
+        "total_elapsed_s": round(sum(s.get("total_elapsed_s", 0) for s in done.values()), 3),
+        "min_e_ads": {m: s.get("reference_min_e_ads") for m, s in sorted(done.items())},
+        "min_e_vac": {m: s.get("reference_min_e_vac") for m, s in sorted(done.items())},
+        "runs": {m: _sanitize(m) for m in sorted(done)},
+    }
+    index_path.write_text(json.dumps(index, indent=2))
+    return index
 
 
 def run_batch(
@@ -918,18 +1244,7 @@ def run_batch(
             failures[material] = f"{type(exc).__name__}: {exc}"
             print(f"[batch] {material} FAILED: {failures[material]}", flush=True)
 
-    index = {
-        "materials": list(materials),
-        "reference": cfg.reference,
-        "candidate": cfg.candidate,
-        "protocols": list(_check_protocols(protocols)),
-        "adsorbate": _fragment_label(cfg.adsorbate),
-        "completed": sorted(summaries),
-        "failed": failures,
-        "total_elapsed_s": round(sum(s["total_elapsed_s"] for s in summaries.values()), 3),
-        "runs": {m: _sanitize(m) for m in summaries},
-    }
-    (outdir / "batch.json").write_text(json.dumps(index, indent=2))
+    _write_batch_index(outdir, cfg, protocols, materials, failures)
     return summaries
 
 
@@ -994,6 +1309,12 @@ if __name__ == "__main__":
              "The dominant cost knob: 4,2 is 192 atoms, 1,1 is 24.",
     )
     parser.add_argument(
+        "--seed-standoff", type=float, metavar="A",
+        help=f"A added to the covalent bond length when placing the adsorbate "
+             f"(default {RunConfig().adsorbate.seed_standoff}). Too small starts the "
+             "fragment inside bonding range; too large and it never interacts.",
+    )
+    parser.add_argument(
         "--max-vacancy-sites", type=int,
         help="cap the vacancy funnel (default: all symmetry-distinct O sites). Smoke-test "
              "knob — keeps the first N by site index, so it can drop the true minimum.",
@@ -1037,6 +1358,8 @@ if __name__ == "__main__":
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, species=species, coords=coords))
     if args.max_sites:
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, max_per_position=args.max_sites))
+    if args.seed_standoff is not None:
+        cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, seed_standoff=args.seed_standoff))
     if args.max_vacancy_sites:
         cfg = replace(cfg, slab=replace(cfg.slab, max_vacancy_sites=args.max_vacancy_sites))
     slab_over = {}

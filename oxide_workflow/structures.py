@@ -76,7 +76,7 @@ def _require_ordered(structure: Structure, source: str) -> None:
 
 
 def _conventional(structure: Structure) -> Structure:
-    """Conventional standard cell.
+    """Conventional standard cell. Fix the coordinate system before cleaving.
 
     SlabConfig.miller_index is defined against the conventional setting, so a primitive
     input would cut a different facet than the one the run is labelled with.
@@ -88,7 +88,7 @@ def _structure_paths(identifier: str) -> tuple[Path, Path]:
     stem = identifier.replace("/", "_").replace("\\", "_")
     return STRUCTURE_DIR / f"{stem}.cif", STRUCTURE_DIR / f"{stem}.json"
 
-
+# used to fetch and save MP-IDs
 def add_material(structure: Structure, identifier: str, provenance: dict) -> Path:
     """Normalize a cell and save it as <identifier>.cif + .json in STRUCTURE_DIR.
 
@@ -97,8 +97,8 @@ def add_material(structure: Structure, identifier: str, provenance: dict) -> Pat
     in the conventional setting by construction, so a saved cell and a freshly fetched one
     cut the same facet.
     """
-    _require_ordered(structure, identifier)
-    structure = _conventional(structure)
+    _require_ordered(structure, identifier) # check if there are partial occupancies
+    structure = _conventional(structure) # Apply conventions for pymatgen
 
     cif_path, meta_path = _structure_paths(identifier)
     STRUCTURE_DIR.mkdir(parents=True, exist_ok=True)
@@ -166,7 +166,7 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
 
 
 def get_structure(identifier: str) -> Structure:
-    """Resolve a built-in alias or a saved identifier to a bulk cell."""
+    """Resolve a built-in alias or a saved identifier to a bulk cell. Gets rid of provenance dict."""
     return _resolve(identifier)[0]
 
 

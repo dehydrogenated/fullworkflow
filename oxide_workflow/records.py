@@ -95,11 +95,15 @@ OUTCAR_NAME = "OUTCAR"
 POSCAR_NAME = "POSCAR"
 CONTCAR_NAME = "CONTCAR"
 TRAJECTORY_NAME = "trajectory.xyz"
+# Machine-readable twin of the OUTCAR summary block, and the resume marker. OUTCAR is for
+# reading; this is for re-entering a run that was killed part-way (see ``read_relaxation``).
+RELAX_NAME = "relax.json"
 
 # Stages with exactly one relaxation → their files live directly in the stage dir, with no
-# per-site subfolder. ``bare_substrate`` is the E_ads reference state relaxed by the seeded
-# protocol (and by run_stage.py when it enters at the adsorbate stage from a file).
-_SINGLE_RELAX_STAGES = ("bulk", "slab", "bare_substrate")
+# per-site subfolder. ``bare_substrate`` and ``pristine_slab`` are the E_ads and E_vac reference
+# states that the seeded protocol has to relax for itself (full_pipeline gets both free
+# from its own chain); run_stage.py relaxes them too when it enters mid-chain from a file.
+_SINGLE_RELAX_STAGES = ("bulk", "slab", "bare_substrate", "pristine_slab")
 
 
 def _sanitize(text: str) -> str:
@@ -129,7 +133,7 @@ def relax_subfolder_name(stage: str, site_id: Optional[dict]) -> str:
     - adsorbate → ``site<site_index>_<position type>`` (densified sampling places several
       sites of the same type — e.g. multiple distinct ``ontop`` — so the type alone is no
       longer unique; the site index disambiguates them)
-    - bulk / slab / bare_substrate → ``""`` (files live directly in the stage dir)
+    - bulk / slab / bare_substrate / pristine_slab → ``""`` (files in the stage dir)
     """
     if stage in _SINGLE_RELAX_STAGES or not site_id:
         return ""
@@ -153,9 +157,11 @@ RANKING_COLUMNS = (
     "folder",
     "site_index",
     "symmetry_class",
+    "site_label",
     "energy_eV",
     "dE_from_min_eV",
     "e_ads_eV",
+    "e_vac_eV",
     "converged",
     "nsteps",
     "flags",
@@ -200,6 +206,7 @@ _OUTCAR_LINES = (
     ("facet", "facet"),
     ("composition", "composition"),
     ("site", "site"),
+    ("site_label", "chemical_site"),  # coordination label, e.g. Ti5c / O2c
     ("canonical", "canonical"),
     ("optimizer", "optimizer"),
     ("fmax_target", "fmax_target (eV/A)"),
@@ -210,6 +217,7 @@ _OUTCAR_LINES = (
     ("start_fmax", "start_fmax (eV/A)"),
     ("energy", "final_energy (eV)"),
     ("e_ads", "E_ads (eV)"),  # adsorbate stage only; negative = bound
+    ("e_vac", "E_vac (eV)"),  # vacancy stage only; lower = easier to form
     ("fmax", "final_fmax (eV/A)"),
     ("adsorbate_max_disp", "adsorbate_max_disp (A)"),
     ("flags", "flags"),
@@ -254,6 +262,9 @@ def write_relaxation(
     - ``trajectory.xyz`` copied from ``trajectory_src`` when present (graceful skip if the
       worker produced none — e.g. an ASE-less backend).
     - ``OUTCAR`` composed from ``header`` + ``opt_log`` (per-step energies).
+    - ``relax.json`` = the same header as data, written LAST so its presence means every
+      other file in the leaf is already complete. A job killed mid-write leaves a leaf
+      without it, and ``read_relaxation`` then declines to resume that leaf.
 
     Returns the leaf directory.
     """
@@ -264,4 +275,30 @@ def write_relaxation(
     if trajectory_src is not None and Path(trajectory_src).exists():
         shutil.copyfile(trajectory_src, dest / TRAJECTORY_NAME)
     (dest / OUTCAR_NAME).write_text(format_outcar(header, opt_log))
+    (dest / RELAX_NAME).write_text(json.dumps({"header": header, "opt_log": opt_log}, indent=2))
     return dest
+
+
+def read_relaxation(dest: str | Path) -> Optional[dict]:
+    """Read back a completed leaf, or ``None`` if it is absent/partial/unreadable.
+
+    The counterpart to ``write_relaxation``: returns ``{"header", "opt_log", "initial",
+    "final"}``, where ``initial`` is the stage input the leaf was produced from and
+    ``final`` the relaxed geometry. Callers use ``initial`` to decide whether the cached
+    result answers the question they are about to ask (see ``pipeline._resume``).
+
+    Anything unexpected — missing marker, truncated JSON, unparseable POSCAR — returns
+    ``None`` rather than raising, because the only cost of declining to resume is redoing
+    a relaxation, while resuming something malformed would corrupt the run silently.
+    """
+    dest = Path(dest)
+    try:
+        payload = json.loads((dest / RELAX_NAME).read_text())
+        return {
+            "header": payload["header"],
+            "opt_log": payload.get("opt_log", ""),
+            "initial": Structure.from_file(dest / POSCAR_NAME),
+            "final": Structure.from_file(dest / CONTCAR_NAME),
+        }
+    except (OSError, ValueError, KeyError):
+        return None
