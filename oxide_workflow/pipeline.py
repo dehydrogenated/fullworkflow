@@ -43,6 +43,8 @@ screening
     --adsorbate         H | CO | H2O | O2 | O2-side | O (default: AdsorbateConfig pins H)
     --max-sites         adsorbate sites kept per position type (default: all)
     --max-vacancy-sites cap the vacancy funnel (default: all) — smoke tests only
+    --vacancy-depth     Å below the top an O can sit and still be a surface vacancy
+                        (default 1.8 = bridging O2c + in-plane O3c; 0 = no limit)
 
 relaxation -> RelaxConfig
     --fmax          force convergence, eV/A (default 0.02)
@@ -188,30 +190,30 @@ def _adsorbate_max_disp(initial, final, n_ads: int) -> float | None:
     return float(np.linalg.norm(cart, axis=1).max())
 
 
-def _adsorbate_start_distance(initial, n_ads: int):
+def _adsorbate_anchor_distance(structure, n_ads: int):
     """(distance Å, covalent bond length Å) of the adsorbate binding atom to its nearest
-    surface atom *at placement*.
+    surface atom, in the given structure — call on the initial structure for the
+    "placed too close" check, or the final structure for the "desorbed" check.
 
     The binding atom is the first adsorbate atom (``coords[0]`` in the fragment), appended
-    at index ``len - n_ads``. Compares its placement distance to the nearest substrate atom
-    against the covalent bond length for that element pair — the reference for "spawned on
-    the answer" (too close) detection. Returns ``(None, None)`` if there's nothing to
-    compare."""
-    if n_ads <= 0 or len(initial) <= n_ads:
+    at index ``len - n_ads``. Compares its distance to the nearest substrate atom against
+    the covalent bond length for that element pair. Returns ``(None, None)`` if there's
+    nothing to compare."""
+    if n_ads <= 0 or len(structure) <= n_ads:
         return None, None
-    ads_i = len(initial) - n_ads
-    L = initial.lattice
+    ads_i = len(structure) - n_ads
+    L = structure.lattice
     best_j, best_d = None, 1e9
-    for j in range(len(initial) - n_ads):
-        d = initial.frac_coords[ads_i] - initial.frac_coords[j]
+    for j in range(len(structure) - n_ads):
+        d = structure.frac_coords[ads_i] - structure.frac_coords[j]
         d -= np.round(d)  # minimum image under PBC
         dist = float(np.linalg.norm(d @ L.matrix))
         if dist < best_d:
             best_j, best_d = j, dist
     if best_j is None:
         return None, None
-    ads_sym = str(initial[ads_i].specie)
-    surf_sym = str(initial[best_j].specie)
+    ads_sym = str(structure[ads_i].specie)
+    surf_sym = str(structure[best_j].specie)
     bond = float(
         covalent_radii[atomic_numbers[surf_sym]] + covalent_radii[atomic_numbers[ads_sym]]
     )
@@ -409,7 +411,14 @@ def _relax_record(
         else None
     )
     start_ads_distance, ads_bond_length = (
-        _adsorbate_start_distance(structure, len(cfg.adsorbate.species))
+        _adsorbate_anchor_distance(structure, len(cfg.adsorbate.species))
+        if stage == "adsorbate"
+        else (None, None)
+    )
+    # Same measurement, on the relaxed structure — reuses the placement-time bond length
+    # as the reference unit for both checks (start too close / end too far).
+    end_ads_distance, _ = (
+        _adsorbate_anchor_distance(res.structure, len(cfg.adsorbate.species))
         if stage == "adsorbate"
         else (None, None)
     )
@@ -419,6 +428,7 @@ def _relax_record(
         nsteps=res.nsteps if stage == "adsorbate" else None,
         adsorbate_max_disp=ads_max_disp,
         start_ads_distance=start_ads_distance,
+        end_ads_distance=end_ads_distance,
         ads_bond_length=ads_bond_length,
     )
     e_ads, e_vac = _derived(res.energy)
@@ -765,7 +775,7 @@ def _run_reference_chain(
     mu_o = oxygen_chemical_potential(ref, cfg, relax, cachedir=gas_cache)
 
     ref_vac = _run_funnel(
-        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, max_sites=cfg.slab.max_vacancy_sites), ref, stage="vacancy",
+        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, max_sites=cfg.slab.max_vacancy_sites, surface_depth=cfg.slab.vacancy_surface_depth), ref, stage="vacancy",
         protocol="reference", geometry_source="cut_from_relaxed_slab", cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
         e_vac_reference=(ref_slab.energy, mu_o),
@@ -881,7 +891,7 @@ def _run_protocol_chain(
 
     # ---- vacancy funnel --------------------------------------------------------------
     c_vac = _run_funnel(
-        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites), cand,
+        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites, surface_depth=cfg.slab.vacancy_surface_depth), cand,
         stage="vacancy", protocol=protocol, geometry_source=src["vacancy"], cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
         e_vac_reference=(e_pristine, mu_o),
@@ -1320,6 +1330,12 @@ if __name__ == "__main__":
              "knob — keeps the first N by site index, so it can drop the true minimum.",
     )
     parser.add_argument(
+        "--vacancy-depth", type=float, metavar="A",
+        help=f"how deep below the top an O can sit and still count as a surface vacancy "
+             f"(default {_slab.vacancy_surface_depth}, which keeps the bridging O2c "
+             f"and the in-plane O3c). 0 = no limit, enumerating subsurface O too.",
+    )
+    parser.add_argument(
         "--fmax", type=float,
         help=f"force convergence, eV/A (default {RunConfig().relax.fmax}). Loosen to ~0.1 "
              "for a smoke test; it is the biggest single speed lever.",
@@ -1362,6 +1378,10 @@ if __name__ == "__main__":
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, seed_standoff=args.seed_standoff))
     if args.max_vacancy_sites:
         cfg = replace(cfg, slab=replace(cfg.slab, max_vacancy_sites=args.max_vacancy_sites))
+    if args.vacancy_depth is not None:
+        # 0 clears the limit; argparse can't express "None means unset" for a float flag.
+        cfg = replace(cfg, slab=replace(
+            cfg.slab, vacancy_surface_depth=args.vacancy_depth or None))
     slab_over = {}
     if args.termination is not None:
         slab_over["termination_index"] = args.termination

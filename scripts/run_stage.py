@@ -158,9 +158,11 @@ def main(a) -> None:
                 pristine_energy = pristine.energy
             mu_o = oxygen_chemical_potential(backend, cfg, pipeline.relax)
             vacs = oxygen_vacancy_candidates(
-                current, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites
+                current, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites,
+                surface_depth=cfg.slab.vacancy_surface_depth,
             )
-            print(f"  {len(vacs)} symmetry-distinct O vacancy site(s)")
+            scope = "surface" if cfg.slab.vacancy_surface_depth else "symmetry-distinct"
+            print(f"  {len(vacs)} {scope} O vacancy site(s)")
             out = pipeline._run_funnel(
                 vacs, backend, stage="vacancy", protocol="reference",
                 geometry_source="from_relaxed_slab", cfg=cfg, outdir=outdir,

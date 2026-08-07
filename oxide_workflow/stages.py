@@ -1,14 +1,8 @@
-"""Stage structure-building: cut a slab, and the decorate() vacancy interface (§4).
+"""Stage structure-building: cut a slab, and the decorate() for vacancies and adsorbates
 
 Each stage's starting structure = previous stage's relaxed output + a fresh
 modification, unrelaxed by construction. This module produces those *unrelaxed*
-starting structures; relaxation is the backend's job (design §3).
-
-``decorate(substrate, modification)`` is the shared vacancy/adsorbate seam. Both the
-vacancy modification (remove a representative O) and the adsorbate modification (place a
-fragment at a heuristic height on the relaxed substrate) are implemented here, each
-producing *unrelaxed* candidates keyed by an abstract site identity — symmetry class +
-fractional coordinate, never line numbers.
+starting structures; relaxation is the backend's job 
 """
 
 from __future__ import annotations
@@ -24,24 +18,17 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from .config import AdsorbateConfig, SlabConfig
 
-
+# Computes sum of covalent radii as part of a guess for placement height above surface atom
 def _covalent_height(surface_symbol: str, adsorbate_symbol: str) -> float:
-    """Placement height above a surface atom = sum of covalent radii (Å), material-agnostic."""
     return float(
         covalent_radii[atomic_numbers[surface_symbol]]
         + covalent_radii[atomic_numbers[adsorbate_symbol]]
     )
 
-
+# Returns height placed above surface atom for adsorbate. Depends on the chemistry and preset standoff.
 def _target_distance(
     surface_symbol: str, adsorbate_symbol: str, config: AdsorbateConfig
 ) -> float:
-    """Target adsorbate–surface *bond distance* (Å) to the coordinating atom.
-
-    Covalent radii + ``seed_standoff`` — element-driven, so a sweep over many compositions
-    needs no manual tuning. This is a *distance*, not a vertical height; the normal
-    placement height is solved from it in ``_placement_z``.
-    """
     return _covalent_height(surface_symbol, adsorbate_symbol) + config.seed_standoff
 
 
@@ -216,23 +203,34 @@ class VacancyCandidate:
 
 def oxygen_vacancy_candidates(
     slab: Structure, symprec: float = 0.1, freeze_bottom_fraction: float = 0.0,
-    max_sites: int | None = None,
+    max_sites: int | None = None, surface_depth: float | None = 1.8,
 ) -> list[VacancyCandidate]:
     """decorate(slab, O-removal) → one candidate per symmetry-distinct O site (§4).
 
     Deterministic order (by originating site index) so that two models decorating the
     *same* substrate produce aligned candidate lists (seeded per-stage matching).
     ``freeze_bottom_fraction`` re-imposes the slab's bottom-layer freeze on each
-    candidate so the relaxation keeps the F2B convention, and restricts enumeration to
-    O sites on the free (top) surface — a vacancy inside the frozen region cannot relax,
-    so it is not a meaningful candidate. Because the slab is top/bottom symmetric, a
-    symmetry class can span both surfaces; such a class is kept, represented by its
-    free-region member.
+    candidate so the relaxation keeps the F2B convention, and drops O classes that live
+    entirely inside the frozen region — a vacancy that cannot relax is not a meaningful
+    candidate.
+
+    ``surface_depth`` (Å below the topmost atom; ``SlabConfig.vacancy_surface_depth``)
+    keeps only O near the surface — on rutile(110) the bridging O2c and the in-plane O3c.
+    ``None`` enumerates everything, which is dominated by subsurface bulk O and can win
+    the funnel outright; see the config note. Measured from the topmost atom, the same
+    reference ``AdsorbateConfig.surface_depth`` uses.
+
+    Each class is represented by its TOPMOST member, not its lowest-indexed one. The slab
+    has two surfaces and the adsorbate only ever lands on the top, so a bridging-O class
+    spanning both must contribute the vacancy on the face being studied. Site index runs
+    bottom-up, so choosing by index instead put the vacancy on the *bottom* surface
+    whenever the freeze cutoff left it in play (every class, at ``--freeze 0``).
     """
     sga = SpacegroupAnalyzer(slab, symprec=symprec)
     sym = sga.get_symmetrized_structure()
     wyckoffs = getattr(sym, "wyckoff_symbols", None)
     cutoff = bottom_cutoff_z(slab, freeze_bottom_fraction)
+    z_top = max(s.coords[2] for s in slab)  # surface reference for ``surface_depth``
     # Coordination of the O being removed, so a vacancy can be named the way literature
     # names it: on rutile(110) the classic defect is a missing bridging O2c, and an O3c
     # vacancy is a different (in-plane, much less favourable) thing entirely.
@@ -247,7 +245,10 @@ def oxygen_vacancy_candidates(
             members = [i for i in members if slab[i].coords[2] > cutoff + 1e-6]
             if not members:
                 continue  # this O class lives only in the frozen region — skip it
-        rep = members[0]  # free-region representative (lowest index → deterministic)
+        # Topmost, not lowest-indexed: the adsorbate stage only ever sees the top face.
+        rep = max(members, key=lambda i: slab[i].coords[2])
+        if surface_depth is not None and z_top - slab[rep].coords[2] > surface_depth:
+            continue  # too deep to be a surface vacancy
         vac = slab.copy()
         vac.remove_sites([rep])
         apply_bottom_freeze(vac, freeze_bottom_fraction)
@@ -265,7 +266,13 @@ def oxygen_vacancy_candidates(
             )
         )
     if not candidates:
-        raise RuntimeError("no symmetry-distinct oxygen sites found on slab")
+        raise RuntimeError(
+            f"no oxygen within {surface_depth} A of the top of this slab — check the "
+            "termination, or raise/clear SlabConfig.vacancy_surface_depth to enumerate "
+            "deeper O as well"
+            if surface_depth is not None
+            else "no symmetry-distinct oxygen sites found on slab"
+        )
     candidates.sort(key=lambda c: c.site_id["site_index"])
     # Smoke-test cap. Deliberately a plain head slice, not a spread like the adsorbate
     # sampler: vacancy classes are already symmetry-distinct, so there is no clustering to

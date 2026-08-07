@@ -40,6 +40,38 @@ def test_vacancy_candidates_are_distinct_and_carry_site_identity():
     assert idxs == sorted(idxs)
 
 
+def test_vacancy_enumeration_is_limited_to_the_surface():
+    """Default keeps the two surface O shells; clearing the depth exposes subsurface O."""
+    slab = make_slab(rutile_tio2(), SlabConfig())
+    z_top = max(s.coords[2] for s in slab)
+
+    surface = oxygen_vacancy_candidates(slab, surface_depth=1.8)
+    depths = [z_top - slab[c.site_id["site_index"]].coords[2] for c in surface]
+    assert all(d <= 1.8 for d in depths), depths
+    # The bridging O2c and the in-plane O3c — the funnel needs both to have a ranking.
+    assert {c.site_id["site_label"] for c in surface} == {"O2c", "O3c"}
+
+    everything = oxygen_vacancy_candidates(slab, surface_depth=None)
+    assert len(everything) > len(surface)  # subsurface classes are the difference
+
+
+def test_vacancy_sites_come_from_the_top_face_at_any_freeze_fraction():
+    """The adsorbate only ever lands on the top face, so the vacancy must be cut there.
+
+    Representatives were previously chosen by lowest site index, which runs bottom-up: at
+    freeze=0 that put every vacancy on the *bottom* surface.
+    """
+    slab = make_slab(rutile_tio2(), SlabConfig())
+    z_top = max(s.coords[2] for s in slab)
+
+    for freeze in (0.5, 0.3, 0.0):
+        cands = oxygen_vacancy_candidates(slab, freeze_bottom_fraction=freeze)
+        assert cands
+        for c in cands:
+            depth = z_top - slab[c.site_id["site_index"]].coords[2]
+            assert depth <= 1.8, (freeze, c.site_id, depth)
+
+
 def test_adsorbate_candidates_carry_site_identity():
     slab = make_slab(rutile_tio2(), SlabConfig())
     cfg = AdsorbateConfig()  # single H, ontop/bridge/hollow

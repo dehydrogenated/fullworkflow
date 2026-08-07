@@ -612,10 +612,11 @@ def test_stage_rankings_file(tmp_path, monkeypatch):
         assert rows[0]["folder"] == header["canonical"]
         assert (sdir / rows[0]["folder"] / "CONTCAR").exists()
 
-        # the recorded margin is the rank1 -> rank2 gap
-        assert header["margin_to_runner_up_eV"] == pytest.approx(
-            energies[1] - energies[0], abs=1e-6
-        )
+        # The recorded margin is the rank1 -> rank2 gap. Compared against rank 2's
+        # dE_from_min rather than a difference of the two energy_eV columns: those are
+        # rounded to 6dp independently, so subtracting them can disagree with the margin
+        # by a full 1e-6 for reasons that have nothing to do with the ranking.
+        assert header["margin_to_runner_up_eV"] == float(rows[1]["dE_from_min_eV"])
 
         # E_ads is present on the adsorbate stage and blank on the vacancy stage
         if stage == "adsorbate":
