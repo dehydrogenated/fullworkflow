@@ -52,6 +52,21 @@ export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
+# Ask SLURM what it gave us rather than taking a flag. CUDA_VISIBLE_DEVICES is set by the
+# scheduler only when --gres=gpu was granted, so this is the authoritative answer and it
+# cannot drift from reality:
+#
+#     sbatch --partition=gpu --gres=gpu:1 ...   -> cuda
+#     sbatch --partition=cascade ...            -> cpu
+#
+# A forgotten flag would otherwise mean paying for a GPU node and running on its CPUs, and
+# nothing in the output would say so.
+if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    export OXW_DEVICE=cuda
+else
+    export OXW_DEVICE=cpu
+fi
+
 source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate oxw
 
@@ -60,6 +75,7 @@ cd "$SLURM_SUBMIT_DIR"
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus"
 echo "conda base $OXW_CONDA_BASE"
 echo "models     $OXW_MODEL_DIR"
+echo "device     $OXW_DEVICE"
 python -c "import oxide_workflow, sys; print('python', sys.version.split()[0])"
 
 # Fail before burning walltime if the checkpoint never made it over.

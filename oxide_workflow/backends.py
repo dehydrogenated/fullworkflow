@@ -33,6 +33,13 @@ WORKER = Path(__file__).parent / "worker_relax.py"
 CONDA_BASE = os.environ.get("OXW_CONDA_BASE", "/opt/anaconda3")
 MODEL_DIR = Path(os.environ.get("OXW_MODEL_DIR", Path.home() / "Desktop/mace_test/models"))
 
+# Where the model runs. Both loaders in worker_relax.py take this straight through to
+# mace_mp(device=) / load_predict_unit(device=). Default stays "cpu" so nothing changes
+# locally; the job script sets it to "cuda" when SLURM actually granted a GPU. An env var
+# rather than a per-Backend edit because it is a property of the *machine*, not the model —
+# every backend in REGISTRY wants the same answer on a given node.
+DEVICE = os.environ.get("OXW_DEVICE", "cpu")
+
 
 @dataclass
 class Backend:
@@ -42,7 +49,7 @@ class Backend:
     env: str  # conda env name the worker runs in
     loader: str  # worker dispatch key: "mace" | "fairchem" | ...
     model_path: str
-    device: str = "cpu"
+    device: str = DEVICE  # module-level default; see OXW_DEVICE above
     dtype: str = "float64"
     task: str = "omat"  # fairchem/UMA task head; ignored by other loaders
     head: Optional[str] = None  # MACE multi-head selector (e.g. "omat_pbe"); None = model default
