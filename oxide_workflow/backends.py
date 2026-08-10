@@ -15,6 +15,7 @@ interface (deferred, §8).
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import tempfile
 from dataclasses import dataclass, field
@@ -24,7 +25,13 @@ from typing import Optional
 from pymatgen.core import Structure
 
 WORKER = Path(__file__).parent / "worker_relax.py"
-CONDA_BASE = "/opt/anaconda3"
+
+# The two machine-specific paths. Defaults are the local Mac layout, so nothing changes
+# here; set the env vars on a cluster (Sockeye) where conda and the checkpoints live
+# elsewhere. Env vars rather than a config field because they must be set *before* the
+# module is imported, and because a scheduler passes them into a job for free.
+CONDA_BASE = os.environ.get("OXW_CONDA_BASE", "/opt/anaconda3")
+MODEL_DIR = Path(os.environ.get("OXW_MODEL_DIR", Path.home() / "Desktop/mace_test/models"))
 
 
 @dataclass
@@ -153,8 +160,8 @@ def relax(
 # The reference is mace-mh-1's OMat24 (PBE) head — the updated OMat24 that benchmarked
 # more accurately than the standalone cached MACE-OMAT24 it replaces.
 
-MACE_MH1 = str(Path.home() / "Desktop/mace_test/models/mace-mh-1.model")
-UMA_CKPT = str(Path.home() / "Desktop/mace_test/models/uma-s-1p2.pt")
+MACE_MH1 = str(MODEL_DIR / "mace-mh-1.model")
+UMA_CKPT = str(MODEL_DIR / "uma-s-1p2.pt")
 
 
 def _mace(name: str, head: str, labels: tuple[str, ...]) -> Backend:
