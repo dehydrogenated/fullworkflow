@@ -29,6 +29,17 @@
 # Anything after the script name is forwarded to the pipeline verbatim. The package is
 # installed editable, so it imports from /arc/project no matter where the job runs.
 #
+# GPU runs need a *different allocation* — Sockeye rejects --gres=gpu unless the account
+# ends in -gpu — and command-line flags beat the #SBATCH lines below, so no edit is needed:
+#
+#     sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=0:30:00 \
+#            /arc/.../sockeye_job.sh --candidates UMA-oc22 ...
+#
+# Only the fairchem env has a CUDA torch (cu126 — the GPUs are V100/sm_70, and newer CUDA
+# builds have dropped Volta). mace-clean is CPU-only, so a MACE candidate submitted to the
+# gpu partition will fail with "Torch not compiled with CUDA enabled": keep MACE on
+# cascade, or rebuild its torch from the same index.
+#
 # Consequence: --outdir is relative to $SLURM_SUBMIT_DIR, so results land in scratch,
 # which is purged on a timer. See the end of this script.
 
