@@ -16,10 +16,21 @@
 # torch use the cores via threads. Nothing here parallelises across nodes; that is a
 # later change to relax(), not to this script.
 #
-# Submit from the repo root:
-#     sbatch scripts/sockeye_job.sh
-#     sbatch scripts/sockeye_job.sh --material mp-825 --protocol seeded
-# Anything after the script name is forwarded to the pipeline verbatim.
+# Submit from a directory in /scratch, NOT from the repo in /arc/project — Sockeye
+# rejects the job outright ("Submitting jobs from directories residing in /arc/project is
+# not allowed"). Project space is backed up and snapshotted for durability; scratch is the
+# parallel filesystem meant to absorb job I/O. Only the *working directory* is restricted,
+# so the script itself stays in the repo and is named by absolute path:
+#
+#     cd /scratch/st-akkiraju-1/$USER
+#     sbatch /arc/project/st-akkiraju-1/$USER/fullworkflow/scripts/sockeye_job.sh
+#     sbatch /arc/.../sockeye_job.sh --material mp-825 --protocol seeded
+#
+# Anything after the script name is forwarded to the pipeline verbatim. The package is
+# installed editable, so it imports from /arc/project no matter where the job runs.
+#
+# Consequence: --outdir is relative to $SLURM_SUBMIT_DIR, so results land in scratch,
+# which is purged on a timer. See the end of this script.
 
 set -euo pipefail
 
@@ -57,4 +68,48 @@ test -f "$OXW_MODEL_DIR/mace-mh-1.model" || {
     exit 1
 }
 
-srun python -m oxide_workflow.pipeline "$@"
+# `|| STATUS=$?` rather than a bare call: `set -e` would abort the script the moment the
+# pipeline exited non-zero, skipping the archive below — losing exactly the crashed run
+# that is worth keeping. The real exit code is re-raised at the very end.
+STATUS=0
+srun python -m oxide_workflow.pipeline "$@" || STATUS=$?
+
+# Archive to durable space. Results land in scratch (see the header), which is purged by
+# last-access time, so a run left only there disappears silently. Unconditional on
+# purpose: a failed run is usually the one you most want to inspect.
+PROJECT_RUNS=/arc/project/st-akkiraju-1/ssong18/runs
+
+# Defaults mirror the pipeline's own, so the label is right even when nothing was passed.
+MATERIAL=rutile-tio2   # RunConfig.polymorph
+ADSORBATE=H            # AdsorbateConfig.species
+OUTDIR=runs/latest     # pipeline default
+prev=""
+for arg in "$@"; do
+    case "$arg" in                      # --flag=value form
+        --material=*)  MATERIAL="${arg#*=}" ;;
+        --adsorbate=*) ADSORBATE="${arg#*=}" ;;
+        --outdir=*)    OUTDIR="${arg#*=}" ;;
+    esac
+    case "$prev" in                     # --flag value form
+        --material)  MATERIAL="$arg" ;;
+        --adsorbate) ADSORBATE="$arg" ;;
+        --outdir)    OUTDIR="$arg" ;;
+    esac
+    prev="$arg"
+done
+
+# --material may be a path to a CIF, so keep the leaf and strip anything that would break
+# a directory name. Sorts chronologically because the timestamp leads.
+TAG=$(basename "$MATERIAL")
+TAG=${TAG//[^A-Za-z0-9._-]/-}
+DEST="$PROJECT_RUNS/$(date +%Y%m%d-%H%M%S)_${TAG}_${ADSORBATE}"
+
+# Guarded by `if` so a failed copy cannot trip `set -e` and swallow $STATUS.
+if mkdir -p "$DEST" && rsync -a "$OUTDIR"/ "$DEST"/; then
+    cp -f "slurm-${SLURM_JOB_ID}.out" "slurm-${SLURM_JOB_ID}.err" "$DEST"/ 2>/dev/null || true
+    echo "archived to $DEST"
+else
+    echo "WARNING: archive to $DEST failed — results remain only in scratch" >&2
+fi
+
+exit $STATUS
