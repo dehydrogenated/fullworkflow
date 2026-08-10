@@ -87,6 +87,19 @@ else
     export OXW_DEVICE=cpu
 fi
 
+# Compute nodes mount BOTH $HOME and /arc/project read-only — scratch is the only writable
+# filesystem. Every library that caches under $HOME therefore has to be redirected or it
+# dies mid-run: triton (JIT-compiles fused GPU kernels, killed the first GPU run with
+# "Read-only file system: /home/…/.triton"), torch inductor, huggingface, and matplotlib,
+# which pymatgen pulls in. Kept outside $SLURM_SUBMIT_DIR/runs so compiled kernels survive
+# between jobs — otherwise every run recompiles from scratch.
+export XDG_CACHE_HOME="${OXW_CACHE:-$SLURM_SUBMIT_DIR/.cache}"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
+export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
+export HF_HOME="$XDG_CACHE_HOME/huggingface"
+export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
+mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR"
+
 source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate oxw
 
@@ -140,12 +153,12 @@ TAG=$(basename "$MATERIAL")
 TAG=${TAG//[^A-Za-z0-9._-]/-}
 DEST="$PROJECT_RUNS/$(date +%Y%m%d-%H%M%S)_${TAG}_${ADSORBATE}"
 
-# Guarded by `if` so a failed copy cannot trip `set -e` and swallow $STATUS.
-if mkdir -p "$DEST" && rsync -a "$OUTDIR"/ "$DEST"/; then
-    cp -f "slurm-${SLURM_JOB_ID}.out" "slurm-${SLURM_JOB_ID}.err" "$DEST"/ 2>/dev/null || true
-    echo "archived to $DEST"
-else
-    echo "WARNING: archive to $DEST failed — results remain only in scratch" >&2
-fi
+# The copy cannot happen here: /arc/project is read-only from compute nodes, so this used
+# to warn on every single run for something that can never succeed. Print the command
+# instead — it runs from the login node, where project IS writable.
+echo
+echo "results in scratch: $SLURM_SUBMIT_DIR/$OUTDIR"
+echo "to keep them, run this on the LOGIN node:"
+echo "    mkdir -p $DEST && rsync -a $SLURM_SUBMIT_DIR/$OUTDIR/ $DEST/ && cp $SLURM_SUBMIT_DIR/slurm-${SLURM_JOB_ID}.{out,err} $DEST/"
 
 exit $STATUS
