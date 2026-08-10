@@ -35,10 +35,19 @@
 #     sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=0:30:00 \
 #            /arc/.../sockeye_job.sh --candidates UMA-oc22 ...
 #
-# Only the fairchem env has a CUDA torch (cu126 — the GPUs are V100/sm_70, and newer CUDA
-# builds have dropped Volta). mace-clean is CPU-only, so a MACE candidate submitted to the
-# gpu partition will fail with "Torch not compiled with CUDA enabled": keep MACE on
-# cascade, or rebuild its torch from the same index.
+# BOTH worker envs need a CUDA torch for any GPU run — not just the one holding the
+# candidate. RunConfig.reference is MACE-mh1-omat, so every run loads MACE first to build
+# the ground truth, whatever --candidates says. A CPU-only mace-clean therefore fails even
+# on a pure-UMA run, with "Attempting to deserialize object on a CUDA device but
+# torch.cuda.is_available() is False".
+#
+# Install torch from cu126 in both: the GPUs are V100 (sm_70) and newer CUDA indexes have
+# dropped Volta, while older ones (cu124) top out below the torch~=2.8.0 that
+# fairchem-core 2.21.0 requires. cu126 is the overlap.
+#
+# /arc/project is mounted READ-ONLY on compute nodes, so the archive step below cannot
+# succeed from inside a job — it warns and continues by design. Copy from the login node:
+#     rsync -a /scratch/st-akkiraju-1/$USER/runs/ /arc/project/st-akkiraju-1/$USER/runs/
 #
 # Consequence: --outdir is relative to $SLURM_SUBMIT_DIR, so results land in scratch,
 # which is purged on a timer. See the end of this script.

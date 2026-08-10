@@ -9,6 +9,11 @@ dist/
 .DS_Store
 .claude/settings.local.json
 
+# OC22 bulk downloads (500+ MB); oc22_survey.py documents how to re-fetch
+data/oc22/*.pkl
+data/oc22/*.tar.gz
+data/oc22/is2res_total_train_val_test_lmdbs/
+
 # Run artifacts (records + structures written to disk)
 runs/
 *.traj
