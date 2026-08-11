@@ -96,7 +96,11 @@ fi
 #   row3d_O        the ranking experiment: one adsorbate (O) across nine 3d metals.
 #   rutile_systems H/OH/CO on IrO2 and PbO2 so the adsorbate axis is not one species.
 SEEDSETS=(chain3d row3d_O rutile_systems)
-OUT=runs/oc22_sweep
+# ABSOLUTE, and it matters: oc22_diverge.py resolves --out as `REPO / args.out`, so a
+# relative path lands inside the repo — which is on /arc/project and read-only from a
+# compute node. pathlib lets an absolute right-hand side win, so this overrides cleanly
+# without touching the script. Same reason --seeds is passed absolute below.
+OUT="$SLURM_SUBMIT_DIR/runs/oc22_sweep"
 
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
 echo "models ${MODELS[*]}"
