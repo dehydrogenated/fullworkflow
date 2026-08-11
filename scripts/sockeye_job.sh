@@ -98,7 +98,12 @@ export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
 export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
 export HF_HOME="$XDG_CACHE_HOME/huggingface"
 export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR"
+# fairchem ignores XDG_CACHE_HOME — fairchem/core/_config.py reads FAIRCHEM_CACHE_DIR and
+# otherwise hardcodes ~/.cache/fairchem, then calls os.makedirs at *import* time. So it
+# fails the moment the worker imports it, before any model is touched.
+export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
+mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
+         "$FAIRCHEM_CACHE_DIR"
 
 source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate oxw
