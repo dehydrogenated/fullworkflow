@@ -69,10 +69,19 @@ if [ ${#MODELS[@]} -eq 0 ]; then
     MODELS=(MACE-mh1-omat MACE-mh1-oc20 MACE-mh1-mp UMA-oc22 UMA-oc20 UMA-omat)
 fi
 
-# Two seed sets, run per model. row3d_O is the ranking experiment — one adsorbate (O)
-# across nine 3d metals, which is the only ranking OC22 supports; rutile_systems adds
-# H/OH/CO on IrO2 and PbO2 so the adsorbate axis is not a single species.
-SEEDSETS=(row3d_O rutile_systems)
+# Three seed sets, run per model.
+#   chain3d        the stage chain, and the reason this exists. OC22 carries several
+#                  clean slabs per facet that differ ONLY in oxygen count — same metal
+#                  count, fewer O — which is an oxygen vacancy with a DFT energy. Pairing
+#                  them gives a DFT oxygen-vacancy formation energy to check a model
+#                  against, and pairing either with an O adsorbate on the same facet
+#                  continues the chain. 46 systems, 8 facets, 5 metals; several are
+#                  series rather than pairs, so multiple vacancy concentrations per
+#                  surface. OVFE itself is post-processing on e_mlip/e_dft — no extra
+#                  relaxation needed here.
+#   row3d_O        the ranking experiment: one adsorbate (O) across nine 3d metals.
+#   rutile_systems H/OH/CO on IrO2 and PbO2 so the adsorbate axis is not one species.
+SEEDSETS=(chain3d row3d_O rutile_systems)
 OUT=runs/oc22_sweep
 
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
