@@ -125,10 +125,13 @@ for S in "${SEEDSETS[@]}"; do
 done
 
 echo
-echo "results in scratch: $SLURM_SUBMIT_DIR/$OUT"
+echo "results in scratch: $OUT"
 echo "to keep them, run this on the LOGIN node:"
-D="$PROJECT/runs/$(date +%Y%m%d-%H%M%S)_oc22_sweep"
-echo "    mkdir -p $D && rsync -a $SLURM_SUBMIT_DIR/$OUT/ $D/ && cp $SLURM_SUBMIT_DIR/slurm-${SLURM_JOB_ID}.{out,err} $D/"
+# Array tasks log to slurm-<arrayjob>_<task>, plain jobs to slurm-<jobid>; name whichever
+# this run actually produced so the printed command can be pasted as-is.
+LOG="slurm-${SLURM_ARRAY_JOB_ID:-$SLURM_JOB_ID}${SLURM_ARRAY_TASK_ID:+_$SLURM_ARRAY_TASK_ID}"
+D="$PROJECT/runs/$(date +%Y%m%d)_oc22_sweep"
+echo "    mkdir -p $D && rsync -a $OUT/ $D/ && cp $SLURM_SUBMIT_DIR/$LOG.{out,err} $D/"
 
 if [ ${#FAILED[@]} -gt 0 ]; then
     echo "FAILED models: ${FAILED[*]}" >&2
