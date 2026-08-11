@@ -7,8 +7,8 @@
 #SBATCH --mem=32G
 #SBATCH --time=6:00:00
 #SBATCH --job-name=oc22
-#SBATCH --output=slurm-%j.out
-#SBATCH --error=slurm-%j.err
+#SBATCH --output=slurm-%A_%a.out
+#SBATCH --error=slurm-%A_%a.err
 #
 # Sweep several models through the OC22 seeded-divergence comparison in one job.
 #
@@ -67,6 +67,20 @@ if [ ${#MODELS[@]} -eq 0 ]; then
     # same for surface-trained heads; mp and oc22 are the odd ones out on each side.
     # UMA-oc22 has seen these systems in training — read it as an upper bound.
     MODELS=(MACE-mh1-omat MACE-mh1-oc20 MACE-mh1-mp UMA-oc22 UMA-oc20 UMA-omat)
+fi
+
+# Submitted as an array (--array=0-5), each task takes ONE model and they run
+# concurrently; submitted without, one task does all of them in sequence. An array is
+# never slower: if the allocation caps concurrent GPUs the scheduler just runs it in
+# waves. Every task writes to its own runs/oc22_sweep/<seedset>/<model>/, so there is no
+# shared output to race on, and %A_%a keeps the logs separate too.
+if [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+    if [ "$SLURM_ARRAY_TASK_ID" -ge "${#MODELS[@]}" ]; then
+        echo "array index $SLURM_ARRAY_TASK_ID >= ${#MODELS[@]} models — nothing to do"
+        exit 0
+    fi
+    MODELS=("${MODELS[$SLURM_ARRAY_TASK_ID]}")
+    echo "array task $SLURM_ARRAY_TASK_ID -> ${MODELS[0]}"
 fi
 
 # Three seed sets, run per model.
