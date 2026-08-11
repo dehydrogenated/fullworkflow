@@ -112,6 +112,41 @@ def energy_table(rows: list[dict]) -> None:
         print(f"{m:17s}{len(per):>4}{mu:>10.4f}{sd:>10.4f}{min(per):>10.4f}{max(per):>10.4f}")
 
 
+def flag_table(rows: list[dict]) -> None:
+    """Which validity filter fired, per model — and how close the calls were.
+
+    A third of rows being excluded is either a real finding about the models or a
+    threshold set for the wrong convention, and the two look identical in a summary count.
+    ``oc22_diverge`` calls reconstruction at mean_surface > 0.25 A, a value measured on
+    this repo's frozen-bottom slabs; OC22 relaxes fully unconstrained, so surfaces
+    legitimately move further. The percentile row shows whether exclusions cluster just
+    past the line (threshold suspect) or sit far beyond it (genuinely different minima).
+    """
+    kinds = ("possible_reconstruction", "dissociated", "not_converged")
+    print("\n" + "=" * 78)
+    print("VALIDITY FLAGS  (excluded from every mean above)")
+    print("=" * 78)
+    print(f"{'model':17s}{'rows':>6}{'clean':>7}"
+          + "".join(f"{k.replace('possible_', ''):>17s}" for k in kinds))
+    for m in sorted({r["model"] for r in rows}):
+        mine = [r for r in rows if r["model"] == m]
+        counts = [sum(1 for r in mine if k in r["flags"]) for k in kinds]
+        clean = sum(1 for r in mine if not r["flags"])
+        print(f"{m:17s}{len(mine):>6}{clean:>7}" + "".join(f"{c:>17d}" for c in counts))
+
+    surf = sorted(r["mean_surface"] for r in rows if r.get("mean_surface") is not None)
+    if surf:
+        def pct(p):
+            return surf[min(len(surf) - 1, int(p / 100 * len(surf)))]
+        print(f"\nmean_surface distribution over all {len(surf)} rows "
+              f"(reconstruction threshold 0.25 A):")
+        print("  " + "  ".join(f"p{p}={pct(p):.3f}" for p in (10, 25, 50, 75, 90, 95, 99)))
+        over = [x for x in surf if x > 0.25]
+        near = [x for x in over if x < 0.40]
+        print(f"  {len(over)} rows over the line, of which {len(near)} sit in 0.25-0.40 A "
+              f"({'threshold is doing the work' if len(near) > len(over) / 2 else 'exclusions are far past it'})")
+
+
 def spearman(a: list[float], b: list[float]) -> float | None:
     """Rank correlation, ties averaged. None when fewer than 3 points."""
     n = len(a)
@@ -217,27 +252,38 @@ def vacancy_pairs(rows: list[dict], summaries: dict) -> list[dict]:
                 continue
             comps[(seedset, info["sid"])] = (metal[0], int(c[metal[0]]), int(c["O"]))
 
-    out = []
-    by_model = collections.defaultdict(list)
-    for r in rows:
-        if r["flags"] or r.get("ads") is not None:
+    # Choose each facet's pair ONCE, from DFT composition alone — never from which rows a
+    # given model happened not to flag. Doing it per model silently compared different
+    # pairs: on Zn/mp-2229(310) the surviving slabs gave n_vac 8 for one model, 2 for
+    # another, 6 for a third, so the error column was not measuring the same quantity.
+    # Keyed without seedset, because a facet can appear in more than one seed set
+    # (mp-656887(203) is in both chain3d and row3d_O) and would otherwise be counted twice.
+    facets: dict[tuple, dict[int, tuple]] = collections.defaultdict(dict)
+    for (seedset, sid), (M, nM, nO) in comps.items():
+        info = next((i for i in summaries[seedset].values() if i["sid"] == sid), None)
+        if info is None:
             continue
-        key = (r["seedset"], r["sid"])
-        if key not in comps:
-            continue
-        info = summaries[r["seedset"]][r["system"]]
-        M, nM, nO = comps[key]
-        by_model[(r["model"], r["seedset"], info["bulk_id"],
-                  tuple(info["miller_index"]), M, nM)].append((nO, r))
+        key = (info["bulk_id"], tuple(info["miller_index"]), M, nM)
+        facets[key][sid] = (nO, seedset)
 
-    for (model, seedset, bulk, miller, M, nM), items in sorted(by_model.items()):
-        if len({nO for nO, _ in items}) < 2:
+    canonical = {}
+    for key, members in facets.items():
+        if len({nO for nO, _ in members.values()}) < 2:
             continue
-        items.sort(key=lambda x: -x[0])
-        (nO_hi, rich), (nO_lo, poor) = items[0], items[-1]
-        out.append(dict(model=model, seedset=seedset, bulk=bulk, miller=miller,
-                        metal=M, n_metal=nM, n_vac=nO_hi - nO_lo,
-                        pristine=rich, defective=poor))
+        ordered = sorted(members.items(), key=lambda kv: -kv[1][0])
+        (sid_hi, (nO_hi, _)), (sid_lo, (nO_lo, _)) = ordered[0], ordered[-1]
+        canonical[key] = (sid_hi, sid_lo, nO_hi - nO_lo)
+
+    out = []
+    for model in sorted({r["model"] for r in rows}):
+        mine = {r["sid"]: r for r in rows
+                if r["model"] == model and r.get("ads") is None and not r["flags"]}
+        for (bulk, miller, M, nM), (sid_hi, sid_lo, n_vac) in sorted(canonical.items()):
+            rich, poor = mine.get(sid_hi), mine.get(sid_lo)
+            if rich is None or poor is None:
+                continue  # one half missing or flagged for THIS model — skip, don't substitute
+            out.append(dict(model=model, bulk=bulk, miller=miller, metal=M,
+                            n_metal=nM, n_vac=n_vac, pristine=rich, defective=poor))
     return out
 
 
@@ -325,6 +371,7 @@ def main() -> None:
         print(f"excluded by flag: {dict(flagged)}")
 
     divergence_table(rows)
+    flag_table(rows)
     energy_table(rows)
     ranking_table(rows, summaries)
     ovfe_table(rows, summaries, args.mu_o)
