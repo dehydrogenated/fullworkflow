@@ -147,6 +147,67 @@ def flag_table(rows: list[dict]) -> None:
               f"({'threshold is doing the work' if len(near) > len(over) / 2 else 'exclusions are far past it'})")
 
 
+def examples(rows: list[dict], root: Path) -> None:
+    """One clear specimen of each outcome, with the three structures to open side by side.
+
+    Picked to be *unambiguous* rather than typical — the clean case is the one that moved
+    least, the failures are the ones that failed hardest — because these are for showing
+    someone what each flag means, not for estimating a rate.
+    """
+    def paths(r):
+        d = root / r["seedset"] / r["model"] / r["system"]
+        seed = REPO / "data" / "oc22" / r["seedset"]
+        return (seed / f"{r['system']}_initial.vasp",
+                seed / f"{r['system']}_dft_relaxed.vasp",
+                d / "mlip_relaxed.vasp")
+
+    def show(title, r, why):
+        print(f"\n--- {title}")
+        print(f"  {r['system']}   model={r['model']}   {r['natoms']} atoms   "
+              f"ads={r['ads']}  split={r['split']}")
+        print(f"  {why}")
+        print(f"  divergence mean={r['mean_displacement']:.3f} rmsd={r['rmsd']:.3f} "
+              f"max={r['max_displacement']:.3f} A"
+              + (f"  |  adsorbate mean={r['mean_adsorbate']:.3f}"
+                 if r.get("mean_adsorbate") is not None else ""))
+        print(f"  E_mlip {r['e_mlip']:.3f} vs DFT {r['e_dft']:.3f} "
+              f"({r['e_mlip'] - r['e_dft']:+.3f} eV)   steps={r['nsteps']} "
+              f"fmax {r['start_fmax']:.2f}->{r['final_fmax']:.3f}")
+        a, b, c = paths(r)
+        print(f"  DFT initial : {a}")
+        print(f"  DFT relaxed : {b}")
+        print(f"  MLIP relaxed: {c}")
+
+    print("\n" + "=" * 78)
+    print("EXAMPLE RUNS  (one per outcome — open the three files side by side)")
+    print("=" * 78)
+
+    ads = [r for r in rows if r.get("ads") is not None]
+    clean = [r for r in ads if not r["flags"]]
+    if clean:
+        r = min(clean, key=lambda r: r.get("mean_adsorbate", 9e9))
+        show("BOUND — adsorbate stayed put and the slab barely moved", r,
+             "no flags: adsorbate tracked DFT, surface tracked DFT")
+    diss = [r for r in rows if "dissociated" in r["flags"]]
+    if diss:
+        r = max(diss, key=lambda r: r.get("adsorbate_bond_A", 0))
+        show("SPLIT — the adsorbate came apart", r,
+             f"O-H stretched to {r.get('adsorbate_bond_A', float('nan')):.3f} A "
+             f"(> 1.3 A = dissociated, not stretched)")
+    recon = [r for r in rows if "possible_reconstruction" in r["flags"]]
+    if recon:
+        r = max(recon, key=lambda r: r.get("mean_surface", 0))
+        show("RECONSTRUCTED — the slab found a different minimum", r,
+             f"surface atoms moved {r['mean_surface']:.3f} A on average "
+             f"(> 0.25 A); this is a different structure, not a model error")
+    stuck = [r for r in rows if "not_converged" in r["flags"]]
+    if stuck:
+        r = max(stuck, key=lambda r: r.get("final_fmax", 0))
+        show("DID NOT CONVERGE — still moving when it ran out of steps", r,
+             f"stopped at fmax {r['final_fmax']:.3f} eV/A after {r['nsteps']} steps, "
+             f"target 0.05")
+
+
 def spearman(a: list[float], b: list[float]) -> float | None:
     """Rank correlation, ties averaged. None when fewer than 3 points."""
     n = len(a)
@@ -344,6 +405,8 @@ def main() -> None:
     ap.add_argument("root", help="sweep directory holding <seedset>/<model>/divergence.jsonl")
     ap.add_argument("--seedset", help="restrict to one seed set")
     ap.add_argument("--plot", help="write a PNG summary here")
+    ap.add_argument("--examples", action="store_true",
+                    help="show one example run per outcome, with structure paths")
     ap.add_argument("--mu-o", type=float,
                     help="oxygen chemical potential E(O2)/2 in eV, from the model's own "
                          "gas reference in runs/_gas_refs; required for absolute E_vac")
@@ -375,6 +438,8 @@ def main() -> None:
     energy_table(rows)
     ranking_table(rows, summaries)
     ovfe_table(rows, summaries, args.mu_o)
+    if args.examples:
+        examples(rows, root)
 
     if args.plot:
         make_plot(rows, Path(args.plot))
