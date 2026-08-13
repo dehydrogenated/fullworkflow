@@ -25,7 +25,6 @@ def _describe(structure: Structure) -> dict:
         "spacegroup": SpacegroupAnalyzer(structure).get_space_group_symbol(), # ex. P4_2/MNM
     }
 
-
 # Reject partial occupancies — MLIPs need one species per site.
 def _require_ordered(structure: Structure, source: str) -> None:
     if not structure.is_ordered:
@@ -38,16 +37,11 @@ def _require_ordered(structure: Structure, source: str) -> None:
 def _conventional(structure: Structure) -> Structure:
     return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
 
-def _stem(identifier: str) -> str:
-    return identifier.replace("/", "_").replace("\\", "_")
-
-# Where a saved material's folder is: STRUCTURE_DIR/<id>_<formula>/. The formula isn't
-# derivable from the identifier alone, so a read has to glob for it rather than build the
-# path directly.
+# Where a saved material's folder is: STRUCTURE_DIR/<id>_<formula>/. Use glob to match id and folder.
 def _structure_dir_for(identifier: str) -> Path | None:
     if not STRUCTURE_DIR.is_dir():
         return None
-    matches = sorted(STRUCTURE_DIR.glob(f"{_stem(identifier)}_*"))
+    matches = sorted(STRUCTURE_DIR.glob(f"{identifier}_*"))
     return matches[0] if matches else None
 
 # Used to normalize a cell and save the ID cif and json in STRUCTURE_DIR/<id>_<formula>/.
@@ -56,9 +50,8 @@ def add_material(structure: Structure, identifier: str, provenance: dict) -> Pat
     structure = _conventional(structure) # Apply conventions for pymatgen
     description = _describe(structure)
 
-    stem = _stem(identifier)
-    folder = STRUCTURE_DIR / f"{stem}_{description['formula']}"
-    cif_path, meta_path = folder / f"{stem}.cif", folder / f"{stem}.json"
+    folder = STRUCTURE_DIR / f"{identifier}_{description['formula']}" # Can now sort my formula
+    cif_path, meta_path = folder / f"{identifier}.cif", folder / f"{identifier}.json"
     folder.mkdir(parents=True, exist_ok=True)
     structure.to(filename=str(cif_path))
     meta_path.write_text(
@@ -109,8 +102,7 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
             f"`python scripts/fetch_structure.py {identifier}` on a networked machine "
             f"(needs MP_API_KEY) and commit the pair it writes to {STRUCTURE_DIR}."
         )
-    stem = _stem(identifier)
-    cif_path, meta_path = folder / f"{stem}.cif", folder / f"{stem}.json"
+    cif_path, meta_path = folder / f"{identifier}.cif", folder / f"{identifier}.json"
 
     structure = Structure.from_file(str(cif_path))
     provenance = (
