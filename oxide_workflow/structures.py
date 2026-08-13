@@ -10,9 +10,8 @@ from pathlib import Path
 from pymatgen.core import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
-# Saved cells live here and are meant to be committed. Two reasons: Sockeye compute
-# nodes have no outbound network, and MP re-relaxes entries between database releases —
-# a committed cell keeps a rerun of the same benchmark reproducible.
+
+# Saved cells live here and are meant to be committed for offline computation
 STRUCTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "structures"
 
 
@@ -25,6 +24,7 @@ def _describe(structure: Structure) -> dict:
         "spacegroup": SpacegroupAnalyzer(structure).get_space_group_symbol(), # ex. P4_2/MNM
     }
 
+
 # Reject partial occupancies — MLIPs need one species per site.
 def _require_ordered(structure: Structure, source: str) -> None:
     if not structure.is_ordered:
@@ -33,9 +33,11 @@ def _require_ordered(structure: Structure, source: str) -> None:
             "an ordered cell. Pick an ordered entry, or build a supercell approximant first."
         )
 
+
 # Converts cell into a standardized cell with a fixed coordinate system before cleaving for accurate indices
 def _conventional(structure: Structure) -> Structure:
     return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
+
 
 # Where a saved material's folder is: STRUCTURE_DIR/<id>_<formula>/. Use glob to match id and folder.
 def _structure_dir_for(identifier: str) -> Path | None:
@@ -44,12 +46,12 @@ def _structure_dir_for(identifier: str) -> Path | None:
     matches = sorted(STRUCTURE_DIR.glob(f"{identifier}_*"))
     return matches[0] if matches else None
 
+
 # Used to normalize a cell and save the ID cif and json in STRUCTURE_DIR/<id>_<formula>/.
 def add_material(structure: Structure, identifier: str, provenance: dict) -> Path:
     _require_ordered(structure, identifier) # check if there are partial occupancies
     structure = _conventional(structure) # Apply conventions for pymatgen
     description = _describe(structure)
-
     folder = STRUCTURE_DIR / f"{identifier}_{description['formula']}" # Can now sort my formula
     cif_path, meta_path = folder / f"{identifier}.cif", folder / f"{identifier}.json"
     folder.mkdir(parents=True, exist_ok=True)
@@ -68,21 +70,15 @@ def add_material(structure: Structure, identifier: str, provenance: dict) -> Pat
     return cif_path
 
 
+# Scans STRUCTURE_DIR for every saved material's CIF and returns their identifiers
 def available() -> list[str]:
-    """Identifiers that resolve offline right now — whatever has been saved to STRUCTURE_DIR."""
     return sorted(p.stem for p in STRUCTURE_DIR.glob("*/*.cif")) if STRUCTURE_DIR.is_dir() else []
 
 
+# Shared lookup behind get_structure()/structure_provenance() for structure and provenance
 def _resolve(identifier: str) -> tuple[Structure, dict]:
-    """Identifier -> (structure, provenance). Never hits the network.
 
-    Resolution order: a path on disk, then a saved cell in ``STRUCTURE_DIR``. The path
-    branch is what lets you point a run straight at a CIF or POSCAR you built yourself,
-    without going through Materials Project at all.
-    """
-
-    # A path to a structure file: normalized through the same guards as a saved cell, so a
-    # hand-supplied CIF cuts the same facet a fetched one would.
+    # One-off: run directly on a file, nothing committed or reusable by name.
     path = Path(identifier)
     if path.suffix and path.is_file():
         structure = Structure.from_file(str(path))
@@ -95,6 +91,7 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
             **_describe(structure),
         }
 
+    # Saved: whatever's already committed to STRUCTURE_DIR, fetched or hand-added.
     folder = _structure_dir_for(identifier)
     if folder is None:
         raise KeyError(
@@ -113,11 +110,11 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
     return structure, provenance
 
 
+# The structure-only half of _resolve() — what callers building or relaxing a cell want.
 def get_structure(identifier: str) -> Structure:
-    """Resolve a saved identifier or a file path to a bulk cell. Gets rid of provenance dict."""
     return _resolve(identifier)[0]
 
 
+# The provenance-only half of _resolve() — for stamping into run records, not computation.
 def structure_provenance(identifier: str) -> dict:
-    """What the identifier actually resolved to — for stamping into run records."""
     return _resolve(identifier)[1]
