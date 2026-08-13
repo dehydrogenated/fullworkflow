@@ -39,23 +39,16 @@ def _require_ordered(structure: Structure, source: str) -> None:
 def _conventional(structure: Structure) -> Structure:
     return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
 
-
+# Takes an id and returns a .cif and .json path
 def _structure_paths(identifier: str) -> tuple[Path, Path]:
     stem = identifier.replace("/", "_").replace("\\", "_")
     return STRUCTURE_DIR / f"{stem}.cif", STRUCTURE_DIR / f"{stem}.json"
 
-# used to fetch and save MP-IDs
+# Used to normalize a cell and save the ID cif and json in STRUCTURE_DIR.
 def add_material(structure: Structure, identifier: str, provenance: dict) -> Path:
-    """Normalize a cell and save it as <identifier>.cif + .json in STRUCTURE_DIR.
-
-    The only writer into STRUCTURE_DIR. Enforcing the guards here — rather than on each
-    read — is what lets get_structure() trust the folder: everything in it is ordered and
-    in the conventional setting by construction, so a saved cell and a freshly fetched one
-    cut the same facet.
-    """
     _require_ordered(structure, identifier) # check if there are partial occupancies
     structure = _conventional(structure) # Apply conventions for pymatgen
-
+    
     cif_path, meta_path = _structure_paths(identifier)
     STRUCTURE_DIR.mkdir(parents=True, exist_ok=True)
     structure.to(filename=str(cif_path))
