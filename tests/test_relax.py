@@ -13,7 +13,7 @@ import shutil
 import pytest
 
 from oxide_workflow.backends import get_backend, relax
-from oxide_workflow.structures import rutile_tio2
+from oxide_workflow.structures import manual_rutile_tio2
 
 pytestmark = pytest.mark.skipif(
     not shutil.os.path.exists(get_backend("MACE-mh1-omat").interpreter()),
@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def test_rutile_bulk_relaxes_with_mace(tmp_path):
-    struct = rutile_tio2()
+    struct = manual_rutile_tio2()
     res = relax(struct, get_backend("MACE-mh1-omat"), workdir=tmp_path, relax_cell=True)
 
     assert res.converged, f"did not converge: fmax={res.fmax}"

@@ -21,28 +21,7 @@ class SlabConfig:
     center_slab: bool = True # Centres slab on Z, meaning slabGenerator can easily find highest atom for surface
     supercell: tuple[int, int] = (4, 2)  # lateral replication (along a, b); dilutes defect images, decrease no. vacancies when multiplied
     freeze_bottom_fraction: float = 0.5  # fix the bottom fraction of slab thickness at bulk positions
-
-    # How deep below the topmost atom an O can sit and still count as a surface vacancy.
-    # None enumerates every symmetry-distinct O in the unfrozen region — mostly subsurface
-    # bulk O, and a different question from surface chemistry.
-    #
-    # This is not just a cost knob. The funnel's winner becomes the substrate for the
-    # adsorbate stage, and uncapped on IrO2 a vacancy 3.19 A down beat the surface O2c by
-    # 0.33 eV — so the adsorbate stage ran on a surface with no vacancy in it at all.
-    #
-    # 1.8 A keeps the first two O shells. Measured across all seven rutile(110) slabs, the
-    # shells sit at a fixed spacing with one symmetry class each:
-    #
-    #     shell 0   O2c   0.00 A            bridging, the classic defect
-    #     shell 1   O3c   1.16 - 1.36 A     in-plane surface
-    #     shell 2   O3c   2.31 - 2.72 A     first bulk-like layer  <- excluded
-    #
-    # so any cut in (1.36, 2.31) gives the same two candidates on every one; 1.8 is the
-    # middle of that window. Keeping shell 1 is deliberate: with the bridging O alone the
-    # funnel has nothing to rank, and the O3c is the comparison that shows the model
-    # actually prefers the bridging site rather than being assumed to.
-    vacancy_surface_depth: float | None = 1.8
-    max_vacancy_sites: int | None = None  # cap the vacancy funnel (None = all); smoke tests only — keeps the first N by site index, which may drop the real minimum
+    vacancy_surface_depth: float | None = 1.8  # How deep below the topmost atom an O can sit and still count as a surface vacancy. None = non-frozen layer
 
 @dataclass(frozen=True)
 class RelaxConfig:
@@ -65,7 +44,6 @@ class AdsorbateConfig:
     min_clearance: float = 0.8  # reject a placement closer than this x the covalent bond length to any slab atom — the guard against spawning inside a surface atom
     symm_reduce: float = 0.01  # pymatgen: how close (fractional coords) before two sites merge
     max_per_position: int | None = None  # cap sites kept per position type (None = all); for smoke tests
-
 
 # Named fragments for --adsorbate. First entry is the binding atom and must sit at z=0:
 # pymatgen anchors the lowest-z atom on the site, so ordering sets which end faces the surface.

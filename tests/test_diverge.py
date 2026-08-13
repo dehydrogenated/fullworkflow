@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from oxide_workflow.diverge import diverge
 from oxide_workflow.records import DivergenceRecord, append_divergence, read_divergence_table
-from oxide_workflow.structures import rutile_tio2
+from oxide_workflow.structures import manual_rutile_tio2
 
 
 def test_identical_structures_have_zero_divergence():
-    ref = rutile_tio2()
+    ref = manual_rutile_tio2()
     rec = diverge(ref, ref.copy(), stage="bulk", model="self")
     assert rec.meta["matched"] is True
     assert rec.mean_displacement < 1e-6
@@ -18,7 +18,7 @@ def test_identical_structures_have_zero_divergence():
 
 
 def test_localized_rattle_is_attributed_to_the_culprit_atom():
-    ref = rutile_tio2()
+    ref = manual_rutile_tio2()
     cand = ref.copy()
 
     # Move exactly one O atom a clear amount; leave the rest in place -> localized.
@@ -47,7 +47,7 @@ def test_localized_rattle_is_attributed_to_the_culprit_atom():
 
 
 def test_uniform_drift_signature():
-    ref = rutile_tio2()
+    ref = manual_rutile_tio2()
     cand = ref.copy()
     # Rigidly shift every atom by the same vector -> uniform drift: rmsd ~= mean.
     cand.translate_sites(range(len(cand)), [0.05, 0.05, 0.05], frac_coords=False)
@@ -58,7 +58,7 @@ def test_uniform_drift_signature():
 
 
 def test_divergence_record_serializes(tmp_path):
-    ref = rutile_tio2()
+    ref = manual_rutile_tio2()
     cand = ref.copy()
     cand.translate_sites(2, [0.1, 0.0, 0.0], frac_coords=False)
     rec = diverge(ref, cand, stage="bulk", model="candidate")

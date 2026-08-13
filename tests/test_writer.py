@@ -303,10 +303,10 @@ def test_get_structure_resolves_alias_and_rejects_unknown():
 
 def test_get_structure_loads_a_local_cif(tmp_path):
     """The 'upload a CIF' route: point at a file, get a conventional ordered cell."""
-    from oxide_workflow.structures import get_structure, rutile_tio2, structure_provenance
+    from oxide_workflow.structures import get_structure, manual_rutile_tio2, structure_provenance
 
     cif = tmp_path / "my_structure.cif"
-    rutile_tio2().to(filename=str(cif))
+    manual_rutile_tio2().to(filename=str(cif))
 
     struct = get_structure(str(cif))
     assert struct.composition.reduced_formula == "TiO2"
@@ -334,7 +334,7 @@ def test_get_structure_rejects_a_disordered_cif(tmp_path):
 def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
     from oxide_workflow import pipeline
     from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
-    from oxide_workflow.structures import register_structure, rutile_tio2
+    from oxide_workflow.structures import register_structure, manual_rutile_tio2
 
     global _FAKE_TRAJ
     _FAKE_TRAJ = tmp_path / "traj_src.xyz"
@@ -343,7 +343,7 @@ def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(pipeline, "relax", _fake_relax)
     # a second "material" — same cell, distinct identifier — proves the sweep, no MP fetch
-    register_structure("mp-fake-2", rutile_tio2)
+    register_structure("mp-fake-2", manual_rutile_tio2)
 
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "batch"
@@ -732,7 +732,7 @@ def test_batch_index_accumulates_across_one_at_a_time_runs(tmp_path, monkeypatch
 
     from oxide_workflow import pipeline
     from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
-    from oxide_workflow.structures import register_structure, rutile_tio2
+    from oxide_workflow.structures import register_structure, manual_rutile_tio2
 
     global _FAKE_TRAJ
     _FAKE_TRAJ = tmp_path / "traj_src.xyz"
@@ -740,8 +740,8 @@ def test_batch_index_accumulates_across_one_at_a_time_runs(tmp_path, monkeypatch
         '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
     )
     monkeypatch.setattr(pipeline, "relax", _fake_relax)
-    register_structure("mp-fake-a", rutile_tio2)
-    register_structure("mp-fake-b", rutile_tio2)
+    register_structure("mp-fake-a", manual_rutile_tio2)
+    register_structure("mp-fake-b", manual_rutile_tio2)
 
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "one_by_one"

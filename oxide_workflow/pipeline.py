@@ -42,7 +42,6 @@ slab geometry -> SlabConfig
 screening
     --adsorbate         H | CO | H2O | O2 | O2-side | O (default: AdsorbateConfig pins H)
     --max-sites         adsorbate sites kept per position type (default: all)
-    --max-vacancy-sites cap the vacancy funnel (default: all) — smoke tests only
     --vacancy-depth     Å below the top an O can sit and still be a surface vacancy
                         (default 1.8 = bridging O2c + in-plane O3c; 0 = no limit)
 
@@ -62,7 +61,7 @@ Worked examples
 
     # fast smoke check that a material runs at all (numbers NOT usable)
     python -m oxide_workflow.pipeline --material mp-856 --supercell 1,1 \\
-        --max-sites 1 --max-vacancy-sites 2 --fmax 0.2 --max-steps 20
+        --max-sites 1 --fmax 0.2 --max-steps 20
 
 Reading the result
 ------------------
@@ -775,7 +774,7 @@ def _run_reference_chain(
     mu_o = oxygen_chemical_potential(ref, cfg, relax, cachedir=gas_cache)
 
     ref_vac = _run_funnel(
-        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, max_sites=cfg.slab.max_vacancy_sites, surface_depth=cfg.slab.vacancy_surface_depth), ref, stage="vacancy",
+        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, surface_depth=cfg.slab.vacancy_surface_depth), ref, stage="vacancy",
         protocol="reference", geometry_source="cut_from_relaxed_slab", cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
         e_vac_reference=(ref_slab.energy, mu_o),
@@ -891,7 +890,7 @@ def _run_protocol_chain(
 
     # ---- vacancy funnel --------------------------------------------------------------
     c_vac = _run_funnel(
-        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites, surface_depth=cfg.slab.vacancy_surface_depth), cand,
+        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, surface_depth=cfg.slab.vacancy_surface_depth), cand,
         stage="vacancy", protocol=protocol, geometry_source=src["vacancy"], cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
         e_vac_reference=(e_pristine, mu_o),
@@ -1325,11 +1324,6 @@ if __name__ == "__main__":
              "fragment inside bonding range; too large and it never interacts.",
     )
     parser.add_argument(
-        "--max-vacancy-sites", type=int,
-        help="cap the vacancy funnel (default: all symmetry-distinct O sites). Smoke-test "
-             "knob — keeps the first N by site index, so it can drop the true minimum.",
-    )
-    parser.add_argument(
         "--vacancy-depth", type=float, metavar="A",
         help=f"how deep below the top an O can sit and still count as a surface vacancy "
              f"(default {_slab.vacancy_surface_depth}, which keeps the bridging O2c "
@@ -1376,8 +1370,6 @@ if __name__ == "__main__":
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, max_per_position=args.max_sites))
     if args.seed_standoff is not None:
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, seed_standoff=args.seed_standoff))
-    if args.max_vacancy_sites:
-        cfg = replace(cfg, slab=replace(cfg.slab, max_vacancy_sites=args.max_vacancy_sites))
     if args.vacancy_depth is not None:
         # 0 clears the limit; argparse can't express "None means unset" for a float flag.
         cfg = replace(cfg, slab=replace(

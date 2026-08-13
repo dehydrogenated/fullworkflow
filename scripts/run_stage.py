@@ -77,8 +77,6 @@ def main(a) -> None:
     if a.supercell:
         nx, ny = (int(v) for v in a.supercell.split(","))
         slab_over["supercell"] = (nx, ny)
-    if a.max_vacancy_sites:
-        slab_over["max_vacancy_sites"] = a.max_vacancy_sites
     if slab_over:
         cfg = replace(cfg, slab=replace(cfg.slab, **slab_over))
 
@@ -158,7 +156,7 @@ def main(a) -> None:
                 pristine_energy = pristine.energy
             mu_o = oxygen_chemical_potential(backend, cfg, pipeline.relax)
             vacs = oxygen_vacancy_candidates(
-                current, freeze_bottom_fraction=frozen, max_sites=cfg.slab.max_vacancy_sites,
+                current, freeze_bottom_fraction=frozen,
                 surface_depth=cfg.slab.vacancy_surface_depth,
             )
             scope = "surface" if cfg.slab.vacancy_surface_depth else "symmetry-distinct"
@@ -233,7 +231,6 @@ if __name__ == "__main__":
     s = ap.add_argument_group("screening")
     s.add_argument("--adsorbate", choices=sorted(ADSORBATE_FRAGMENTS))
     s.add_argument("--max-sites", type=int, help="adsorbate sites per position type")
-    s.add_argument("--max-vacancy-sites", type=int, help="cap the vacancy funnel")
 
     r = ap.add_argument_group("relaxation")
     r.add_argument("--fmax", type=float, default=base.relax.fmax)

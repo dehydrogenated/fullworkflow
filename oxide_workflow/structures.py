@@ -1,6 +1,6 @@
 """
 Specify which bulk to start with
-Resolves a built-in alias or a saved identifier to a warm-start bulk cell
+Resolves a built-in alias or a saved identifier to a warm-start bulk cell. Saved into data/structures as a JSON and CIF
 """
 
 from __future__ import annotations
@@ -17,14 +17,8 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 # a committed cell keeps a rerun of the same benchmark reproducible.
 STRUCTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "structures"
 
-
-def rutile_tio2() -> Structure:
-    """Canonical rutile TiO2 (space group P4_2/mnm), experimental lattice.
-
-    Offline fallback prototype. Pass "mp-2657" for MP's own relaxed cell — in practice it
-    agrees to ~0.1% in a and ~0.3% in volume, so the two warm starts are interchangeable.
-    Re-relaxed by every backend anyway, so these constants are not load-bearing.
-    """
+def manual_rutile_tio2() -> Structure:
+    # Offline fallback prototype. Canonical rutile TiO2 (space group P4_2/mnm), experimental lattice. Similar to mp-2657
     a, c, u = 4.5937, 2.9587, 0.3050
     lattice = Lattice.tetragonal(a, c)
     species = ["Ti", "Ti", "O", "O", "O", "O"]
@@ -44,7 +38,7 @@ def rutile_tio2() -> Structure:
 # scripts/fetch_structure.py.
 
 STRUCTURE_REGISTRY: dict[str, Callable[[], Structure]] = {
-    "rutile-tio2": rutile_tio2,  # hand-written experimental cell, no network needed
+    "rutile-tio2": manual_rutile_tio2,  # hand-written experimental cell, no network needed
 }
 
 
@@ -130,6 +124,8 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
     ``STRUCTURE_DIR``. The path branch is what lets you point a run straight at a CIF or
     POSCAR you built yourself, without going through Materials Project at all.
     """
+
+    # This is for the rutile or any other structure we want to handwrite
     if identifier in STRUCTURE_REGISTRY:
         structure = STRUCTURE_REGISTRY[identifier]()
         return structure, {"identifier": identifier, "source": "builtin", **_describe(structure)}

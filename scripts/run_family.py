@@ -82,7 +82,6 @@ def _plan(materials: list[str], cfg: RunConfig, protocols: tuple[str, ...],
             slab = make_slab(get_structure(m), cfg.slab)
             vacs = oxygen_vacancy_candidates(
                 slab, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
-                max_sites=cfg.slab.max_vacancy_sites,
                 surface_depth=cfg.slab.vacancy_surface_depth,
             )
             ads = adsorbate_candidates(
@@ -144,8 +143,6 @@ def main(a) -> None:
     )
     if a.seed_standoff is not None:
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, seed_standoff=a.seed_standoff))
-    if a.max_vacancy_sites:
-        cfg = replace(cfg, slab=replace(cfg.slab, max_vacancy_sites=a.max_vacancy_sites))
     if a.supercell:
         # The dominant cost knob: a 4x2 slab is 192 atoms, a 1x1 is 24, and relaxation
         # cost scales with atom count *per step*. Shrinking it is the only way to make a
@@ -219,7 +216,6 @@ if __name__ == "__main__":
     ap.add_argument("--cap", type=int, default=6,
                     help="adsorbate sites per position type; 0 = uncapped. Keeps sampling "
                          "density equal across materials (default: 6 -> 18 sites)")
-    ap.add_argument("--max-vacancy-sites", type=int, help="cap the vacancy funnel too")
     ap.add_argument("--seed-standoff", type=float, metavar="A",
                     help=f"A added to the covalent bond length when placing the adsorbate "
                          f"(default {base.adsorbate.seed_standoff})")

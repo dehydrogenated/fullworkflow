@@ -155,7 +155,6 @@ def check(identifier: str, cfg: RunConfig) -> dict:
     try:
         vacs = oxygen_vacancy_candidates(
             slab, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
-            max_sites=cfg.slab.max_vacancy_sites,
             surface_depth=cfg.slab.vacancy_surface_depth,
         )
         res["n_vacancy_sites"] = len(vacs)
