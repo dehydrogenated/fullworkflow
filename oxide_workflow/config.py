@@ -63,4 +63,4 @@ class RunConfig:
     slab: SlabConfig = SlabConfig()
     relax: RelaxConfig = RelaxConfig()
     adsorbate: AdsorbateConfig = AdsorbateConfig()
-    polymorph: str = "rutile-tio2"  
+    polymorph: str = "mp-2657"  

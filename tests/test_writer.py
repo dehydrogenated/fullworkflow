@@ -290,12 +290,9 @@ def test_rerun_resumes_completed_leaves(tmp_path, monkeypatch):
 # ---- material resolution + batch runner (no conda) --------------------------------------
 
 
-def test_get_structure_resolves_alias_and_rejects_unknown():
-    from oxide_workflow.structures import get_structure, structure_provenance
+def test_get_structure_rejects_unknown_material():
+    from oxide_workflow.structures import get_structure
 
-    # the built-in alias resolves offline, and says so
-    assert get_structure("rutile-tio2").composition.reduced_formula == "TiO2"
-    assert structure_provenance("rutile-tio2")["source"] == "builtin"
     # an unregistered, non-mp identifier fails loudly (names the known set)
     with pytest.raises(KeyError):
         get_structure("not-a-material")
@@ -303,10 +300,10 @@ def test_get_structure_resolves_alias_and_rejects_unknown():
 
 def test_get_structure_loads_a_local_cif(tmp_path):
     """The 'upload a CIF' route: point at a file, get a conventional ordered cell."""
-    from oxide_workflow.structures import get_structure, manual_rutile_tio2, structure_provenance
+    from oxide_workflow.structures import get_structure, structure_provenance
 
     cif = tmp_path / "my_structure.cif"
-    manual_rutile_tio2().to(filename=str(cif))
+    get_structure("mp-2657").to(filename=str(cif))
 
     struct = get_structure(str(cif))
     assert struct.composition.reduced_formula == "TiO2"
@@ -334,20 +331,16 @@ def test_get_structure_rejects_a_disordered_cif(tmp_path):
 def test_run_batch_builds_per_material_subtrees(tmp_path, monkeypatch):
     from oxide_workflow import pipeline
     from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
-    from oxide_workflow.structures import register_structure, manual_rutile_tio2
-
     global _FAKE_TRAJ
     _FAKE_TRAJ = tmp_path / "traj_src.xyz"
     _FAKE_TRAJ.write_text(
         '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
     )
     monkeypatch.setattr(pipeline, "relax", _fake_relax)
-    # a second "material" — same cell, distinct identifier — proves the sweep, no MP fetch
-    register_structure("mp-fake-2", manual_rutile_tio2)
 
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "batch"
-    materials = ["rutile-tio2", "mp-fake-2"]
+    materials = ["mp-2657", "mp-825"]  # two distinct committed materials, proves the sweep
     summaries = pipeline.run_batch(
         materials, cfg, outdir=outdir, gas_cache=tmp_path / "gas"
     )
@@ -732,32 +725,28 @@ def test_batch_index_accumulates_across_one_at_a_time_runs(tmp_path, monkeypatch
 
     from oxide_workflow import pipeline
     from oxide_workflow.config import RelaxConfig, RunConfig, SlabConfig
-    from oxide_workflow.structures import register_structure, manual_rutile_tio2
-
     global _FAKE_TRAJ
     _FAKE_TRAJ = tmp_path / "traj_src.xyz"
     _FAKE_TRAJ.write_text(
         '2\nLattice="3 0 0 0 3 0 0 0 3" Properties=species:S:1:pos:R:3\nH 0 0 0\nH 1.5 1.5 1.5\n'
     )
     monkeypatch.setattr(pipeline, "relax", _fake_relax)
-    register_structure("mp-fake-a", manual_rutile_tio2)
-    register_structure("mp-fake-b", manual_rutile_tio2)
 
     cfg = RunConfig(slab=SlabConfig(supercell=(1, 1)), relax=RelaxConfig(max_steps=1))
     outdir = tmp_path / "one_by_one"
 
-    pipeline.run_batch(["mp-fake-a"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    pipeline.run_batch(["mp-2657"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
     first = json.loads((outdir / "batch.json").read_text())
-    assert first["completed"] == ["mp-fake-a"]
+    assert first["completed"] == ["mp-2657"]
 
     # a second, separate invocation for a different material, same outdir
-    pipeline.run_batch(["mp-fake-b"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    pipeline.run_batch(["mp-825"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
     second = json.loads((outdir / "batch.json").read_text())
-    assert second["completed"] == ["mp-fake-a", "mp-fake-b"]   # the first is still there
-    assert second["requested_this_run"] == ["mp-fake-b"]
+    assert second["completed"] == ["mp-2657", "mp-825"]   # the first is still there
+    assert second["requested_this_run"] == ["mp-825"]
     assert second["total_elapsed_s"] > first["total_elapsed_s"]
-    assert set(second["min_e_ads"]) == {"mp-fake-a", "mp-fake-b"}
-    assert set(second["min_e_vac"]) == {"mp-fake-a", "mp-fake-b"}
+    assert set(second["min_e_ads"]) == {"mp-2657", "mp-825"}
+    assert set(second["min_e_vac"]) == {"mp-2657", "mp-825"}
 
 
 def test_batch_index_drops_a_failure_once_it_succeeds(tmp_path, monkeypatch):
@@ -778,15 +767,15 @@ def test_batch_index_drops_a_failure_once_it_succeeds(tmp_path, monkeypatch):
         raise RuntimeError("backend exploded")
 
     monkeypatch.setattr(pipeline, "relax", boom)
-    pipeline.run_batch(["rutile-tio2"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    pipeline.run_batch(["mp-2657"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
     failed = json.loads((outdir / "batch.json").read_text())
-    assert "rutile-tio2" in failed["failed"] and failed["completed"] == []
+    assert "mp-2657" in failed["failed"] and failed["completed"] == []
 
     # rerunning after the cause is fixed clears it
     monkeypatch.setattr(pipeline, "relax", _fake_relax)
-    pipeline.run_batch(["rutile-tio2"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
+    pipeline.run_batch(["mp-2657"], cfg, outdir=outdir, gas_cache=tmp_path / "gas")
     ok = json.loads((outdir / "batch.json").read_text())
-    assert ok["failed"] == {} and ok["completed"] == ["rutile-tio2"]
+    assert ok["failed"] == {} and ok["completed"] == ["mp-2657"]
 
 
 def test_summary_is_self_describing_regardless_of_folder_name(tmp_path, monkeypatch):

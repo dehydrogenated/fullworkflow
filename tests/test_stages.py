@@ -18,11 +18,11 @@ from oxide_workflow.stages import (
     oxygen_vacancy_candidates,
     site_label,
 )
-from oxide_workflow.structures import manual_rutile_tio2
+from oxide_workflow.structures import get_structure
 
 
 def test_make_slab_110_is_stoichiometric_tio2():
-    slab = make_slab(manual_rutile_tio2(), SlabConfig())
+    slab = make_slab(get_structure("mp-2657"), SlabConfig())
     assert slab.composition.reduced_formula == "TiO2"
     # A vacuum gap exists: c is much larger than the in-plane vectors.
     a, b, c = slab.lattice.abc
@@ -30,7 +30,7 @@ def test_make_slab_110_is_stoichiometric_tio2():
 
 
 def test_vacancy_candidates_are_distinct_and_carry_site_identity():
-    slab = make_slab(manual_rutile_tio2(), SlabConfig())
+    slab = make_slab(get_structure("mp-2657"), SlabConfig())
     cands = oxygen_vacancy_candidates(slab)
 
     assert len(cands) >= 1
@@ -49,7 +49,7 @@ def test_vacancy_candidates_are_distinct_and_carry_site_identity():
 
 def test_vacancy_enumeration_is_limited_to_the_surface():
     """Default keeps the two surface O shells; clearing the depth exposes subsurface O."""
-    slab = make_slab(manual_rutile_tio2(), SlabConfig())
+    slab = make_slab(get_structure("mp-2657"), SlabConfig())
     z_top = max(s.coords[2] for s in slab)
 
     surface = oxygen_vacancy_candidates(slab, surface_depth=1.8)
@@ -68,7 +68,7 @@ def test_vacancy_sites_come_from_the_top_face_at_any_freeze_fraction():
     Representatives were previously chosen by lowest site index, which runs bottom-up: at
     freeze=0 that put every vacancy on the *bottom* surface.
     """
-    slab = make_slab(manual_rutile_tio2(), SlabConfig())
+    slab = make_slab(get_structure("mp-2657"), SlabConfig())
     z_top = max(s.coords[2] for s in slab)
 
     for freeze in (0.5, 0.3, 0.0):
@@ -80,7 +80,7 @@ def test_vacancy_sites_come_from_the_top_face_at_any_freeze_fraction():
 
 
 def test_adsorbate_candidates_carry_site_identity():
-    slab = make_slab(manual_rutile_tio2(), SlabConfig())
+    slab = make_slab(get_structure("mp-2657"), SlabConfig())
     cfg = AdsorbateConfig()  # single H, ontop/bridge/hollow
     cands = adsorbate_candidates(slab, cfg)
 
@@ -106,7 +106,7 @@ def test_adsorbate_candidates_carry_site_identity():
 
 def test_termination_index_out_of_range_raises():
     with pytest.raises(IndexError):
-        make_slab(manual_rutile_tio2(), SlabConfig(termination_index=99))
+        make_slab(get_structure("mp-2657"), SlabConfig(termination_index=99))
 
 
 # --- the triangulation vertex set -------------------------------------------------
@@ -129,7 +129,7 @@ def pristine_and_vacancy():
     produces, so the fixture exercises the production path rather than a hand-built defect.
     """
     cfg = SlabConfig()
-    slab = make_slab(manual_rutile_tio2(), cfg)
+    slab = make_slab(get_structure("mp-2657"), cfg)
     cands = oxygen_vacancy_candidates(
         slab,
         freeze_bottom_fraction=cfg.freeze_bottom_fraction,

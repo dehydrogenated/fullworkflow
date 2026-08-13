@@ -61,7 +61,7 @@ The workflow benchmarks MLIP models against a reference model on oxide surfaces.
 - **`config.py`** — all chemistry/relaxation knobs as frozen dataclasses (`RunConfig`, `SlabConfig`, `RelaxConfig`, `AdsorbateConfig`). Edit defaults here; CLI flags override per-run. `ADSORBATE_FRAGMENTS` defines named molecule geometries.
 - **`backends.py`** — the `Backend` dataclass and `relax()` function. Models run in isolated conda envs; the orchestrator writes a POSCAR + job spec, launches `worker_relax.py` in the model's env via subprocess, and reads the result back from disk. Model checkpoints are at `~/Desktop/mace_test/models/`. `REGISTRY` maps model names to backends; `ALL_CANDIDATES` is a convenience tuple of non-reference models.
 - **`stages.py`** — structure building only (no relaxation). `make_slab()` cuts the slab; `oxygen_vacancy_candidates()` and `adsorbate_candidates()` return lists of unrelaxed `Candidate` objects with a `site_id` dict for identification.
-- **`structures.py`** — resolves a material identifier (mp-id, alias, or path) to a `Structure`. Built-in aliases (e.g. `"rutile-tio2"`) are hardcoded in `STRUCTURE_REGISTRY`; everything else is read from `data/structures/` as JSON files saved by `scripts/fetch_structure.py`. `register_structure()` adds to the in-memory registry at runtime only (tests, batch scripts).
+- **`structures.py`** — resolves a material identifier (mp-id or path) to a `Structure`. mp-ids are read from `data/structures/` as CIF+JSON pairs saved by `scripts/fetch_structure.py`; a path is read and normalized directly, no registry involved.
 - **`energetics.py`** — `adsorption_energy()`, `vacancy_formation_energy()`, `gas_reference_energy()`, `oxygen_chemical_potential()`. All energetics use same-calculator terms to cancel per-atom offsets.
 - **`diverge.py`** — computes displacement statistics (mean/rmsd/max) between two relaxed structures via `StructureMatcher`, plus `energy_error`.
 - **`records.py`** — writes the output file tree: POSCAR/CONTCAR/trajectory.xyz/OUTCAR per relaxation leaf, `rankings.csv` per funnel, `header.json` rollups, `divergence.jsonl`, `candidates.jsonl`, `summary.json`.
@@ -92,7 +92,7 @@ runs/<run>/
 
 - Reference model: `MACE-mh1-omat` (OMat24 PBE head of mace-mh-1)
 - Default candidate: `MACE-mh1-oc20`
-- Material: `rutile-tio2` (hand-written TiO2 rutile cell, no network needed)
+- Material: `mp-2657` (rutile TiO2, MP's relaxed cell, committed to `data/structures/`)
 - Facet: (110), termination index 1 (stoichiometric, confirmed by `validate_materials.py`)
 - Supercell: 4×2 = 192 atoms; shrink to 1×1 for smoke tests only
 - fmax: 0.02 eV/Å; loosen to ~0.1 for quick checks (biggest speed lever)

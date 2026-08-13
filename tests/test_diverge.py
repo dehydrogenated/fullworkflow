@@ -5,11 +5,11 @@ from __future__ import annotations
 
 from oxide_workflow.diverge import diverge
 from oxide_workflow.records import DivergenceRecord, append_divergence, read_divergence_table
-from oxide_workflow.structures import manual_rutile_tio2
+from oxide_workflow.structures import get_structure
 
 
 def test_identical_structures_have_zero_divergence():
-    ref = manual_rutile_tio2()
+    ref = get_structure("mp-2657")
     rec = diverge(ref, ref.copy(), stage="bulk", model="self")
     assert rec.meta["matched"] is True
     assert rec.mean_displacement < 1e-6
@@ -18,13 +18,19 @@ def test_identical_structures_have_zero_divergence():
 
 
 def test_localized_rattle_is_attributed_to_the_culprit_atom():
-    ref = manual_rutile_tio2()
+    ref = get_structure("mp-2657")
     cand = ref.copy()
 
     # Move exactly one O atom a clear amount; leave the rest in place -> localized.
+    # Oblique displacement (not axis-aligned): rutile's P4_2/mnm symmetry maps this O
+    # site onto another one under a pure x- or z-only shift, so StructureMatcher's
+    # best-fit search can tie between "this atom moved" and "the cell got relabeled by
+    # that symmetry op" and mislabel the culprit. A displacement with all three
+    # components breaks the tie unambiguously — and is more representative of real
+    # relaxation noise, which never aligns with a crystal symmetry axis anyway.
     o_indices = [i for i, s in enumerate(ref) if str(s.specie) == "O"]
     culprit = o_indices[0]
-    cand.translate_sites(culprit, [0.25, 0.0, 0.0], frac_coords=False, to_unit_cell=False)
+    cand.translate_sites(culprit, [0.15, 0.1, 0.05], frac_coords=False, to_unit_cell=False)
 
     rec = diverge(
         ref, cand, stage="bulk", model="candidate", e_ref=-53.0, e_cand=-52.4,
@@ -47,7 +53,7 @@ def test_localized_rattle_is_attributed_to_the_culprit_atom():
 
 
 def test_uniform_drift_signature():
-    ref = manual_rutile_tio2()
+    ref = get_structure("mp-2657")
     cand = ref.copy()
     # Rigidly shift every atom by the same vector -> uniform drift: rmsd ~= mean.
     cand.translate_sites(range(len(cand)), [0.05, 0.05, 0.05], frac_coords=False)
@@ -58,7 +64,7 @@ def test_uniform_drift_signature():
 
 
 def test_divergence_record_serializes(tmp_path):
-    ref = manual_rutile_tio2()
+    ref = get_structure("mp-2657")
     cand = ref.copy()
     cand.translate_sites(2, [0.1, 0.0, 0.0], frac_coords=False)
     rec = diverge(ref, cand, stage="bulk", model="candidate")

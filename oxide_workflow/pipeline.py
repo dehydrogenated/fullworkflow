@@ -26,8 +26,8 @@ is for changing what "default" means.
 The flags
 ---------
 material and models
-    --material      mp-id, built-in alias, or a path to your own CIF/POSCAR
-                    (default: RunConfig.polymorph, "rutile-tio2")
+    --material      mp-id or a path to your own CIF/POSCAR
+                    (default: RunConfig.polymorph, "mp-2657")
     --candidates    model(s) to benchmark, space-separated (default: RunConfig.candidate)
     --protocol      full_pipeline | seeded | both (default: full_pipeline)
 

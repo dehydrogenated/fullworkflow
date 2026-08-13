@@ -1,15 +1,13 @@
 """
 Specify which bulk to start with
-Resolves a built-in alias or a saved identifier to a warm-start bulk cell. Saved into data/structures as a JSON and CIF
+Resolves a saved identifier or a file path to a warm-start bulk cell. Saved into data/structures as a JSON and CIF
 """
 
 from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
-
-from pymatgen.core import Lattice, Structure
+from pymatgen.core import Structure
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 # Saved cells live here and are meant to be committed. Two reasons: Sockeye compute
@@ -17,51 +15,19 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 # a committed cell keeps a rerun of the same benchmark reproducible.
 STRUCTURE_DIR = Path(__file__).resolve().parent.parent / "data" / "structures"
 
-def manual_rutile_tio2() -> Structure:
-    # Offline fallback prototype. Canonical rutile TiO2 (space group P4_2/mnm), experimental lattice. Similar to mp-2657
-    a, c, u = 4.5937, 2.9587, 0.3050
-    lattice = Lattice.tetragonal(a, c)
-    species = ["Ti", "Ti", "O", "O", "O", "O"]
-    coords = [
-        [0.0, 0.0, 0.0],
-        [0.5, 0.5, 0.5],
-        [u, u, 0.0],
-        [-u, -u, 0.0],
-        [0.5 + u, 0.5 - u, 0.5],
-        [0.5 - u, 0.5 + u, 0.5],
-    ]
-    return Structure(lattice, species, coords)
 
-
-# --- Material registry: identifier -> bulk Structure factory -----------------------------
-# Built-in aliases only. Everything else is read from STRUCTURE_DIR, populated by
-# scripts/fetch_structure.py.
-
-STRUCTURE_REGISTRY: dict[str, Callable[[], Structure]] = {
-    "rutile-tio2": manual_rutile_tio2,  # hand-written experimental cell, no network needed
-}
-
-
-def register_structure(identifier: str, factory: Callable[[], Structure]) -> None:
-    """Register a material identifier -> Structure factory, for callers adding batch members."""
-    STRUCTURE_REGISTRY[identifier] = factory
-
-
+# Returns a dictionary with formula, n_sites, spacegroup
 def _describe(structure: Structure) -> dict:
-    """Provenance fields we can derive from the cell itself."""
+    # Provenance fields we can derive from the cell itself.
     return {
         "formula": structure.composition.reduced_formula,
-        "n_sites": len(structure),
-        "spacegroup": SpacegroupAnalyzer(structure).get_space_group_symbol(),
+        "n_sites": len(structure), # structures behaves like a list of sites, len gives no. atoms
+        "spacegroup": SpacegroupAnalyzer(structure).get_space_group_symbol(), # ex. P4_2/MNM
     }
 
 
+# Reject partial occupancies — MLIPs need one species per site.
 def _require_ordered(structure: Structure, source: str) -> None:
-    """Reject partial occupancies — MLIPs need one species per site.
-
-    Real ICSD/COD CIFs are often disordered (e.g. Ti0.9Nb0.1). Failing when the material is
-    added beats SlabGenerator or the backend failing three stages later.
-    """
     if not structure.is_ordered:
         raise ValueError(
             f"{source} is disordered (partial site occupancies); the relaxation chain needs "
@@ -69,12 +35,8 @@ def _require_ordered(structure: Structure, source: str) -> None:
         )
 
 
+# Converts cell into a standardized cell with a fixed coordinate system before cleaving for accurate indices
 def _conventional(structure: Structure) -> Structure:
-    """Conventional standard cell. Fix the coordinate system before cleaving.
-
-    SlabConfig.miller_index is defined against the conventional setting, so a primitive
-    input would cut a different facet than the one the run is labelled with.
-    """
     return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
 
 
@@ -112,23 +74,17 @@ def add_material(structure: Structure, identifier: str, provenance: dict) -> Pat
 
 
 def available() -> list[str]:
-    """Identifiers that resolve offline right now — aliases plus whatever has been saved."""
-    saved = sorted(p.stem for p in STRUCTURE_DIR.glob("*.cif")) if STRUCTURE_DIR.is_dir() else []
-    return sorted(set(STRUCTURE_REGISTRY) | set(saved))
+    """Identifiers that resolve offline right now — whatever has been saved to STRUCTURE_DIR."""
+    return sorted(p.stem for p in STRUCTURE_DIR.glob("*.cif")) if STRUCTURE_DIR.is_dir() else []
 
 
 def _resolve(identifier: str) -> tuple[Structure, dict]:
     """Identifier -> (structure, provenance). Never hits the network.
 
-    Resolution order: built-in alias, then a path on disk, then a saved cell in
-    ``STRUCTURE_DIR``. The path branch is what lets you point a run straight at a CIF or
-    POSCAR you built yourself, without going through Materials Project at all.
+    Resolution order: a path on disk, then a saved cell in ``STRUCTURE_DIR``. The path
+    branch is what lets you point a run straight at a CIF or POSCAR you built yourself,
+    without going through Materials Project at all.
     """
-
-    # This is for the rutile or any other structure we want to handwrite
-    if identifier in STRUCTURE_REGISTRY:
-        structure = STRUCTURE_REGISTRY[identifier]()
-        return structure, {"identifier": identifier, "source": "builtin", **_describe(structure)}
 
     # A path to a structure file: normalized through the same guards as a saved cell, so a
     # hand-supplied CIF cuts the same facet a fetched one would.
@@ -162,7 +118,7 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
 
 
 def get_structure(identifier: str) -> Structure:
-    """Resolve a built-in alias or a saved identifier to a bulk cell. Gets rid of provenance dict."""
+    """Resolve a saved identifier or a file path to a bulk cell. Gets rid of provenance dict."""
     return _resolve(identifier)[0]
 
 

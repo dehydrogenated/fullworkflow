@@ -36,8 +36,7 @@ from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig
 
 # The well-behaved rutile family, as fetched by scripts/fetch_rutiles.py and confirmed by
 # scripts/validate_materials.py (termination 1 is stoichiometric, non-polar and symmetric
-# for every one). "rutile-tio2" is deliberately absent: it is the same material as mp-2657
-# from a hand-written cell, so including it would buy a duplicate run.
+# for every one).
 RUTILES = {
     "mp-2657": "TiO2",
     "mp-856": "SnO2",
