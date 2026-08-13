@@ -34,23 +34,32 @@ def _require_ordered(structure: Structure, source: str) -> None:
             "an ordered cell. Pick an ordered entry, or build a supercell approximant first."
         )
 
-
 # Converts cell into a standardized cell with a fixed coordinate system before cleaving for accurate indices
 def _conventional(structure: Structure) -> Structure:
     return SpacegroupAnalyzer(structure).get_conventional_standard_structure()
 
-# Takes an id and returns a .cif and .json path
-def _structure_paths(identifier: str) -> tuple[Path, Path]:
-    stem = identifier.replace("/", "_").replace("\\", "_")
-    return STRUCTURE_DIR / f"{stem}.cif", STRUCTURE_DIR / f"{stem}.json"
+def _stem(identifier: str) -> str:
+    return identifier.replace("/", "_").replace("\\", "_")
 
-# Used to normalize a cell and save the ID cif and json in STRUCTURE_DIR.
+# Where a saved material's folder is: STRUCTURE_DIR/<id>_<formula>/. The formula isn't
+# derivable from the identifier alone, so a read has to glob for it rather than build the
+# path directly.
+def _structure_dir_for(identifier: str) -> Path | None:
+    if not STRUCTURE_DIR.is_dir():
+        return None
+    matches = sorted(STRUCTURE_DIR.glob(f"{_stem(identifier)}_*"))
+    return matches[0] if matches else None
+
+# Used to normalize a cell and save the ID cif and json in STRUCTURE_DIR/<id>_<formula>/.
 def add_material(structure: Structure, identifier: str, provenance: dict) -> Path:
     _require_ordered(structure, identifier) # check if there are partial occupancies
     structure = _conventional(structure) # Apply conventions for pymatgen
-    
-    cif_path, meta_path = _structure_paths(identifier)
-    STRUCTURE_DIR.mkdir(parents=True, exist_ok=True)
+    description = _describe(structure)
+
+    stem = _stem(identifier)
+    folder = STRUCTURE_DIR / f"{stem}_{description['formula']}"
+    cif_path, meta_path = folder / f"{stem}.cif", folder / f"{stem}.json"
+    folder.mkdir(parents=True, exist_ok=True)
     structure.to(filename=str(cif_path))
     meta_path.write_text(
         json.dumps(
@@ -58,7 +67,7 @@ def add_material(structure: Structure, identifier: str, provenance: dict) -> Pat
                 "identifier": identifier,
                 **provenance,
                 "added_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                **_describe(structure),
+                **description,
             },
             indent=2,
         )
@@ -68,7 +77,7 @@ def add_material(structure: Structure, identifier: str, provenance: dict) -> Pat
 
 def available() -> list[str]:
     """Identifiers that resolve offline right now — whatever has been saved to STRUCTURE_DIR."""
-    return sorted(p.stem for p in STRUCTURE_DIR.glob("*.cif")) if STRUCTURE_DIR.is_dir() else []
+    return sorted(p.stem for p in STRUCTURE_DIR.glob("*/*.cif")) if STRUCTURE_DIR.is_dir() else []
 
 
 def _resolve(identifier: str) -> tuple[Structure, dict]:
@@ -93,13 +102,15 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
             **_describe(structure),
         }
 
-    cif_path, meta_path = _structure_paths(identifier)
-    if not cif_path.exists():
+    folder = _structure_dir_for(identifier)
+    if folder is None:
         raise KeyError(
             f"unknown material {identifier!r}. Available: {available()}. To add one, run "
             f"`python scripts/fetch_structure.py {identifier}` on a networked machine "
             f"(needs MP_API_KEY) and commit the pair it writes to {STRUCTURE_DIR}."
         )
+    stem = _stem(identifier)
+    cif_path, meta_path = folder / f"{stem}.cif", folder / f"{stem}.json"
 
     structure = Structure.from_file(str(cif_path))
     provenance = (
