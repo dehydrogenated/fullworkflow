@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-"""Relaxation worker — runs *inside a model's conda env* (design §6).
+"""Relaxation worker — runs *inside a model's conda env*.
 
 Import-light on purpose: depends only on ASE + the model package. It must NOT import
 pymatgen or ``oxide_workflow`` — those live in the orchestrator env. All I/O is on disk
@@ -61,7 +61,7 @@ def main(jobfile: str) -> None:
     atoms = read(workdir / spec["input_poscar"], format="vasp")
     atoms.calc = build_calculator(spec)
 
-    start_fmax = max_force(atoms)  # force at the stage input, before relaxing (design §5)
+    start_fmax = max_force(atoms)  # force at the stage input, before relaxing
 
     fmax = float(spec.get("fmax", 0.05))
     max_steps = int(spec.get("max_steps", 500))

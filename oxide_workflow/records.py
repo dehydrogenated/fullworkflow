@@ -1,10 +1,10 @@
-"""Records — the on-disk currency of the pipeline (design §2 step 2, §5).
+"""Records — the on-disk currency of the pipeline.
 
 Everything expensive is written to disk the moment it exists, so a run that dies part-way
 still leaves usable results. Two kinds of output live here:
 
 - ``DivergenceRecord``: one long-format row of the divergence table (candidate vs
-  reference at one stage). Appended to a JSONL table; the schema in design §5 is canonical.
+  reference at one stage). Appended to a JSONL table.
 - **The run tree**: the browsable per-relaxation folders written by ``write_relaxation``,
   the aggregate ``header.json`` rollups, and the per-stage ``rankings.csv``.
 
@@ -27,7 +27,7 @@ from pymatgen.core import Structure
 
 @dataclass
 class DivergenceRecord:
-    """One long-format row of the divergence table (design §5, canonical schema).
+    """One long-format row of the divergence table.
 
     The displacement triple (``mean_displacement``, ``rmsd``, ``max_displacement``)
     comes from a single per-atom displacement vector computed after StructureMatcher

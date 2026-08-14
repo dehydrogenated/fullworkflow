@@ -1,6 +1,7 @@
-"""
-Specify which bulk to start with
-Resolves a saved identifier or a file path to a warm-start bulk cell. Saved into data/structures as a JSON and CIF
+"""Resolves a material identifier (mp-id) or a file path to a bulk Structure.
+
+Saved materials are committed as data/structures/<id>_<formula>/<id>.cif+.json, so runs
+work offline (e.g. on Sockeye).
 """
 
 from __future__ import annotations

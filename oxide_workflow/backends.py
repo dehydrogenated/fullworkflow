@@ -9,7 +9,7 @@ subprocess isolation *is* the backend abstraction in physical form.
 
 Backends carry a capability declaration (``can_relax``, ``is_async``,
 ``training_labels``); DFT will enter later as an async backend behind this same
-interface (deferred, §8).
+interface.
 """
 
 from __future__ import annotations
@@ -26,37 +26,25 @@ from pymatgen.core import Structure
 
 WORKER = Path(__file__).parent / "worker_relax.py"
 
-# The two machine-specific paths. Defaults are the local Mac layout, so nothing changes
-# here; set the env vars on a cluster (Sockeye) where conda and the checkpoints live
-# elsewhere. Env vars rather than a config field because they must be set *before* the
-# module is imported, and because a scheduler passes them into a job for free.
+# Sockeye's job scheduler sets these for its own conda/checkpoint locations; default to the local Mac layout otherwise.
 CONDA_BASE = os.environ.get("OXW_CONDA_BASE", "/opt/anaconda3")
 MODEL_DIR = Path(os.environ.get("OXW_MODEL_DIR", Path.home() / "Desktop/mace_test/models"))
 
-# Where the model runs. Both loaders in worker_relax.py take this straight through to
-# mace_mp(device=) / load_predict_unit(device=). Default stays "cpu" so nothing changes
-# locally; the job script sets it to "cuda" when SLURM actually granted a GPU. An env var
-# rather than a per-Backend edit because it is a property of the *machine*, not the model —
-# every backend in REGISTRY wants the same answer on a given node.
+# Sockeye's job script sets this to "cuda" when SLURM granted a GPU; defaults to "cpu" for local Mac runs.
 DEVICE = os.environ.get("OXW_DEVICE", "cpu")
 
-
+# A model behind the relax interface, plus how to launch its isolated worker.
 @dataclass
 class Backend:
-    """A model behind the relax interface, plus how to launch its isolated worker."""
-
     name: str
     env: str  # conda env name the worker runs in
     loader: str  # worker dispatch key: "mace" | "fairchem" | ...
     model_path: str
     device: str = DEVICE  # module-level default; see OXW_DEVICE above
-    dtype: str = "float64"
+    dtype: str = "float64" # change to float32 if simulation time is too long
     task: str = "omat"  # fairchem/UMA task head; ignored by other loaders
     head: Optional[str] = None  # MACE multi-head selector (e.g. "omat_pbe"); None = model default
-    fmax: float = 0.03  # eV/Å convergence
-    max_steps: int = 500
-    optimizer: str = "FIRE"
-    # capability declaration (design §6)
+    # capability declaration
     can_relax: bool = True
     is_async: bool = False
     training_labels: tuple[str, ...] = ()
@@ -71,7 +59,7 @@ class RelaxResult:
     structure: Structure
     energy: float
     fmax: float  # final max atomic force (eV/Å)
-    start_fmax: float  # force at the stage input before relaxing (design §5)
+    start_fmax: float  # force at the stage input before relaxing
     nsteps: int
     converged: bool
     meta: dict = field(default_factory=dict)  # trajectory metadata
@@ -80,15 +68,19 @@ class RelaxResult:
 def relax(
     structure: Structure,
     backend: Backend,
+    *,
+    fmax: float,
+    max_steps: int,
+    optimizer: str,
     workdir: str | Path | None = None,
     relax_cell: bool = False,
-    **overrides,
 ) -> RelaxResult:
     """Relax ``structure`` with ``backend`` in its isolated env; read result from disk.
 
     ``relax_cell=True`` for bulk (cell + positions); ``False`` for slabs/defects/
-    adsorbates where the cell is pinned. ``overrides`` may set ``fmax``, ``max_steps``,
-    ``optimizer`` per call.
+    adsorbates where the cell is pinned. ``fmax``/``max_steps``/``optimizer`` are required
+    so every caller states its own convergence target, rather than inheriting whatever
+    RelaxConfig or Backend happen to default to.
     """
     if not backend.can_relax:
         raise ValueError(f"backend {backend.name!r} declares can_relax=False")
@@ -109,9 +101,9 @@ def relax(
         "dtype": backend.dtype,
         "task": backend.task,
         "head": backend.head,
-        "fmax": overrides.get("fmax", backend.fmax),
-        "max_steps": overrides.get("max_steps", backend.max_steps),
-        "optimizer": overrides.get("optimizer", backend.optimizer),
+        "fmax": fmax,
+        "max_steps": max_steps,
+        "optimizer": optimizer,
         "relax_cell": relax_cell,
         "trajectory_xyz": "trajectory.xyz",
     }
@@ -147,7 +139,7 @@ def relax(
             "elapsed_s": result["elapsed_s"],
             "relax_cell": relax_cell,
             "workdir": str(work),
-            # journey artifacts surfaced for the hierarchical writer (design: OUTCAR + xyz)
+            # journey artifacts surfaced for the hierarchical writer: OUTCAR + xyz
             "trajectory": str(traj_path) if traj_path.exists() else None,
             "n_frames": result.get("n_frames"),
             "opt_log": opt_log.read_text() if opt_log.exists() else "",
@@ -155,7 +147,7 @@ def relax(
     )
 
 
-# --- Registry: prototype backends (models cached locally; see design §7) -------------
+# --- Registry: prototype backends (models cached locally) ----------------------------
 #
 # Two multi-output checkpoints, each exposing several heads/tasks. Every head/task is
 # registered as its own Backend (same file, different selector) so any can be picked as

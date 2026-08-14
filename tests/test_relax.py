@@ -23,7 +23,10 @@ pytestmark = pytest.mark.skipif(
 
 def test_rutile_bulk_relaxes_with_mace(tmp_path):
     struct = get_structure("mp-2657")
-    res = relax(struct, get_backend("MACE-mh1-omat"), workdir=tmp_path, relax_cell=True)
+    res = relax(
+        struct, get_backend("MACE-mh1-omat"), workdir=tmp_path, relax_cell=True,
+        fmax=0.03, max_steps=500, optimizer="FIRE",
+    )
 
     assert res.converged, f"did not converge: fmax={res.fmax}"
     assert res.fmax <= 0.05

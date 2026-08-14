@@ -1,4 +1,4 @@
-"""Pipeline orchestration — the glue around tested parts (design §7 step 5).
+"""Pipeline orchestration — the glue around tested parts.
 
 Running it
 ==========
@@ -91,7 +91,7 @@ browsable, VESTA-friendly tree (one folder per model, split by stage; each leaf 
 ``POSCAR``/``CONTCAR``/``trajectory.xyz`` + a lightweight ``OUTCAR`` of per-step
 energies; ``header.json`` timing rollups at the aggregate levels). The run-root analysis
 tables — a long-format ``divergence.jsonl``, a ``candidates.jsonl`` recording every
-vacancy/adsorbate candidate's energy per model (the ranking-fidelity by-product, §2),
+vacancy/adsorbate candidate's energy per model (the ranking-fidelity by-product),
 and ``summary.json`` — stay at the run root.
 """
 
@@ -235,7 +235,7 @@ def _relax_header(
     e_vac: float | None,
     flags: list[str],
 ) -> dict:
-    """Leaf-scope header dict: everything the OUTCAR summary block reports (design §5)."""
+    """Leaf-scope header dict: everything the OUTCAR summary block reports."""
     site = relax_subfolder_name(stage, site_id) or "-" if site_id else "-"
     return {
         "model": backend.name,
@@ -1275,8 +1275,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--material",
-        help="mp-id (e.g. mp-2657), path to a CIF/POSCAR, or a registered alias. "
-             "Defaults to RunConfig.polymorph.",
+        help="mp-id (e.g. mp-2657) or a path to a CIF/POSCAR. Defaults to RunConfig.polymorph.",
     )
     parser.add_argument(
         "--miller",

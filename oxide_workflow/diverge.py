@@ -1,4 +1,4 @@
-"""diverge(struct_A, struct_B) -> DivergenceRecord (design §5).
+"""diverge(struct_A, struct_B) -> DivergenceRecord.
 
 The displacement triple (mean, rmsd, max) comes from a *single* per-atom displacement
 vector, computed after StructureMatcher alignment under PBC:

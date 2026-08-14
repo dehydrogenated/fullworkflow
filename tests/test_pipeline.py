@@ -49,7 +49,7 @@ def test_pipeline_produces_both_mode_tables(tmp_path):
             # Unrelaxed-by-construction: the stage input carries real force.
             assert r.start_fmax_at_ref_geom > 0.5
         # Geometric metrics exist when the matcher aligned the pair. A matcher miss is a
-        # valid, informative outcome (§5) — expected mainly if an adsorbate migrates.
+        # valid, informative outcome — expected mainly if an adsorbate migrates.
         if r.meta["matched"]:
             assert r.rmsd is not None and r.rmsd >= 0
             assert r.mean_displacement <= r.rmsd <= r.max_displacement + 1e-9

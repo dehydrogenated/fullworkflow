@@ -144,7 +144,7 @@ def bottom_cutoff_z(
 def apply_bottom_freeze(
     structure: Structure, fraction: float, always_free: "set[int] | None" = None
 ) -> None:
-    """Fix the bottom ``fraction`` of the slab's atomic thickness at bulk positions (§4).
+    """Fix the bottom ``fraction`` of the slab's atomic thickness at bulk positions.
 
     Standard DFT surface convention (F2B-style asymmetric slab): the lower part of the
     slab is held at bulk geometry to mimic bulk hardness while the top relaxes toward
@@ -164,7 +164,7 @@ def apply_bottom_freeze(
 
 
 def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
-    """Cut the pinned facet/termination from a relaxed bulk → unrelaxed slab (§4).
+    """Cut the pinned facet/termination from a relaxed bulk → unrelaxed slab.
 
     Then replicate laterally to the configured supercell (coverage dilution for defects
     and adsorbates) and freeze the bottom fraction of the slab at bulk positions.
@@ -205,7 +205,7 @@ def oxygen_vacancy_candidates(
     slab: Structure, symprec: float = 0.1, freeze_bottom_fraction: float = 0.0,
     max_sites: int | None = None, surface_depth: float | None = 1.8,
 ) -> list[VacancyCandidate]:
-    """decorate(slab, O-removal) → one candidate per symmetry-distinct O site (§4).
+    """decorate(slab, O-removal) → one candidate per symmetry-distinct O site.
 
     Deterministic order (by originating site index) so that two models decorating the
     *same* substrate produce aligned candidate lists (seeded per-stage matching).
@@ -402,7 +402,7 @@ def adsorbate_candidates(
     first-class candidates from one algorithm.
 
     The fragment is placed at *every* symmetry-reduced representative of each requested type
-    — AdsorbML's "try several, keep the minimum" philosophy without its dependencies (§4) —
+    — AdsorbML's "try several, keep the minimum" philosophy without its dependencies —
     so the funnel's energy ranking discovers the real binding site instead of betting the
     run on whichever site pymatgen happened to list first. Placements are unrelaxed by
     construction; relaxation is the backend's job. Enumerating on the *same* substrate

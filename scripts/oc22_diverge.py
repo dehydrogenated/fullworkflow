@@ -109,7 +109,7 @@ def main() -> None:
             print(f"  [reused existing relaxation in {(out / name).relative_to(REPO)}]")
         else:
             res = relax(struct, backend, workdir=out / name, relax_cell=False,
-                        fmax=args.fmax, max_steps=args.max_steps)
+                        fmax=args.fmax, max_steps=args.max_steps, optimizer="FIRE")
             res.structure.to(filename=str(prev), fmt="poscar")
 
         # An atom-order change through the POSCAR round-trip would make every per-atom
