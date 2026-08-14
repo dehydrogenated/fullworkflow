@@ -4,12 +4,8 @@ Backends — the one interface every model sits behind
 ``relax(structure, backend) -> RelaxResult`` (relaxed structure, energy, trajectory
 metadata). Models live in mutually incompatible conda envs, so the orchestrator never
 imports a model: it writes a POSCAR + job spec to disk, launches the model env's
-interpreter on ``worker_relax.py``, and reads the result back from disk. This
-subprocess isolation *is* the backend abstraction in physical form.
-
-Backends carry a capability declaration (``can_relax``, ``is_async``,
-``training_labels``); DFT will enter later as an async backend behind this same
-interface.
+interpreter on ``worker_relax.py``, and reads the result back from disk. Will be used to
+oass RelaxResult to records.py to be saved.
 """
 
 from __future__ import annotations
@@ -44,12 +40,13 @@ class Backend:
     dtype: str = "float64" # change to float32 if simulation time is too long
     task: str = "omat"  # fairchem/UMA task head; ignored by other loaders
     head: Optional[str] = None  # MACE multi-head selector (e.g. "omat_pbe"); None = model default
-    # capability declaration
+   
+    # Capability declaration
     can_relax: bool = True
-    is_async: bool = False
     training_labels: tuple[str, ...] = ()
     python: Optional[str] = None  # override interpreter path; else derived from env
 
+    # Returns which python do I launch to run this model
     def interpreter(self) -> str:
         return self.python or f"{CONDA_BASE}/envs/{self.env}/bin/python"
 
@@ -62,9 +59,11 @@ class RelaxResult:
     start_fmax: float  # force at the stage input before relaxing
     nsteps: int
     converged: bool
-    meta: dict = field(default_factory=dict)  # trajectory metadata
+    meta: dict = field(default_factory=dict)  # trajectory metadata, each new relax gets empty dictionary
 
-
+# Relaxes structure in backend's isolated conda env via worker_relax.py, returning the
+# result read back from disk. fmax/max_steps/optimizer are required so every caller states
+# its own convergence target, instead of silently inheriting a RelaxConfig or Backend default.
 def relax(
     structure: Structure,
     backend: Backend,
@@ -73,15 +72,9 @@ def relax(
     max_steps: int,
     optimizer: str,
     workdir: str | Path | None = None,
-    relax_cell: bool = False,
+    relax_cell: bool = False, # True relaxes both lattice and atomic positions, should only be true for bulk relaxation
 ) -> RelaxResult:
-    """Relax ``structure`` with ``backend`` in its isolated env; read result from disk.
 
-    ``relax_cell=True`` for bulk (cell + positions); ``False`` for slabs/defects/
-    adsorbates where the cell is pinned. ``fmax``/``max_steps``/``optimizer`` are required
-    so every caller states its own convergence target, rather than inheriting whatever
-    RelaxConfig or Backend happen to default to.
-    """
     if not backend.can_relax:
         raise ValueError(f"backend {backend.name!r} declares can_relax=False")
 
@@ -91,6 +84,7 @@ def relax(
     in_poscar, out_poscar, result_json = "input.vasp", "relaxed.vasp", "result.json"
     structure.to(filename=str(work / in_poscar), fmt="poscar")
 
+    # Job order - everything the worker needs to run the relaxation
     spec = {
         "input_poscar": in_poscar,
         "output_poscar": out_poscar,

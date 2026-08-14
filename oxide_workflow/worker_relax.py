@@ -23,7 +23,7 @@ from ase.optimize import BFGS, FIRE
 
 OPTIMIZERS = {"FIRE": FIRE, "BFGS": BFGS}
 
-
+# Pass in a Backend spec to build an ASE calculator
 def build_calculator(spec: dict):
     loader = spec["loader"]
     if loader == "mace":
@@ -63,9 +63,9 @@ def main(jobfile: str) -> None:
 
     start_fmax = max_force(atoms)  # force at the stage input, before relaxing
 
-    fmax = float(spec.get("fmax", 0.05))
-    max_steps = int(spec.get("max_steps", 500))
-    optimizer = OPTIMIZERS[spec.get("optimizer", "FIRE")]
+    fmax = float(spec["fmax"])
+    max_steps = int(spec["max_steps"])
+    optimizer = OPTIMIZERS[spec["optimizer"]]
 
     target = atoms
     if spec.get("relax_cell", False):
