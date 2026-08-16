@@ -48,17 +48,17 @@ def test_vacancy_candidates_are_distinct_and_carry_site_identity():
 
 
 def test_vacancy_enumeration_is_limited_to_the_surface():
-    """Default keeps the two surface O shells; clearing the depth exposes subsurface O."""
+    """Default keeps the two surface O shells; clearing block_radius exposes subsurface O."""
     slab = make_slab(get_structure("mp-2657"), SlabConfig())
-    z_top = max(s.coords[2] for s in slab)
 
-    surface = oxygen_vacancy_candidates(slab, surface_depth=1.8)
-    depths = [z_top - slab[c.site_id["site_index"]].coords[2] for c in surface]
-    assert all(d <= 1.8 for d in depths), depths
+    surface = oxygen_vacancy_candidates(slab, block_radius=1.3)
+    z = slab.cart_coords[:, 2]
+    exposed = exposed_surface_atoms(slab, depth=float(z.max() - z.min()), block_radius=1.3)
+    assert all(c.site_id["site_index"] in exposed for c in surface)
     # The bridging O2c and the in-plane O3c — the funnel needs both to have a ranking.
     assert {c.site_id["site_label"] for c in surface} == {"O2c", "O3c"}
 
-    everything = oxygen_vacancy_candidates(slab, surface_depth=None)
+    everything = oxygen_vacancy_candidates(slab, block_radius=None)
     assert len(everything) > len(surface)  # subsurface classes are the difference
 
 
@@ -133,7 +133,7 @@ def pristine_and_vacancy():
     cands = oxygen_vacancy_candidates(
         slab,
         freeze_bottom_fraction=cfg.freeze_bottom_fraction,
-        surface_depth=cfg.vacancy_surface_depth,
+        block_radius=cfg.vacancy_block_radius,
     )
     o2c = next(c for c in cands if c.site_id["site_label"] == "O2c")
     return slab, o2c.structure, o2c.site_id["site_index"]

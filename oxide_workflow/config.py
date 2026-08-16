@@ -21,7 +21,7 @@ class SlabConfig:
     center_slab: bool = True # Centres slab on Z, meaning slabGenerator can easily find highest atom for surface
     supercell: tuple[int, int] = (4, 2)  # lateral replication (along a, b); dilutes defect images, decrease no. vacancies when multiplied
     freeze_bottom_fraction: float = 0.5  # fix the bottom fraction of slab thickness at bulk positions
-    vacancy_surface_depth: float | None = 1.8  # How deep below the topmost atom an O can sit and still count as a surface vacancy. None = non-frozen layer
+    vacancy_block_radius: float | None = 1.3  # Å; same vacuum line-of-sight test as adsorbate placement. None = every symmetry-distinct O, not just surface ones
 
 @dataclass(frozen=True)
 class RelaxConfig:

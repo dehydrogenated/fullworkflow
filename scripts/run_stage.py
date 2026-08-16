@@ -157,9 +157,9 @@ def main(a) -> None:
             mu_o = oxygen_chemical_potential(backend, cfg, pipeline.relax)
             vacs = oxygen_vacancy_candidates(
                 current, freeze_bottom_fraction=frozen,
-                surface_depth=cfg.slab.vacancy_surface_depth,
+                block_radius=cfg.slab.vacancy_block_radius,
             )
-            scope = "surface" if cfg.slab.vacancy_surface_depth else "symmetry-distinct"
+            scope = "surface" if cfg.slab.vacancy_block_radius else "symmetry-distinct"
             print(f"  {len(vacs)} {scope} O vacancy site(s)")
             out = pipeline._run_funnel(
                 vacs, backend, stage="vacancy", protocol="reference",

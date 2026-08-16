@@ -2,7 +2,7 @@
 
 Each stage's starting structure = previous stage's relaxed output + a fresh
 modification, unrelaxed by construction. This module produces those *unrelaxed*
-starting structures; relaxation is the backend's job 
+starting structures; relaxation is the backend's job
 """
 
 from __future__ import annotations
@@ -18,90 +18,72 @@ from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
 from .config import AdsorbateConfig, SlabConfig
 
-# Computes sum of covalent radii as part of a guess for placement height above surface atom
-def _covalent_height(surface_symbol: str, adsorbate_symbol: str) -> float:
-    return float(
-        covalent_radii[atomic_numbers[surface_symbol]]
-        + covalent_radii[atomic_numbers[adsorbate_symbol]]
-    )
+# --- Universal tools: shared by the slab, vacancy, and adsorbate stages -------------------
 
-# Returns height placed above surface atom for adsorbate. Depends on the chemistry and preset standoff.
-def _target_distance(
-    surface_symbol: str, adsorbate_symbol: str, config: AdsorbateConfig
-) -> float:
-    return _covalent_height(surface_symbol, adsorbate_symbol) + config.seed_standoff
-
-
-def _placement_z(
-    structure: Structure,
-    coord,
-    pool: "set[int]",
-    adsorbate_symbol: str,
-    config: AdsorbateConfig,
-) -> "tuple[float, int | None]":
-    """(height Å, nearest exposed atom) for the adsorbate's binding atom over a site's x,y.
-
-    The second value is the laterally closest exposed atom — what the site sits *over*.
-    ``_spread_sites`` groups on its element so site selection can tell a Ti-topped site
-    from an O-topped one. It is deliberately not the atom that set the height: Ti's larger
-    covalent radius makes it the height constraint for most sites on rutile(110), including
-    ones directly above a bridging O, so height would not discriminate.
-
-    pymatgen returns each site at a flat plane-referenced height; only its x,y is kept and
-    the height re-solved here, so placement is species- and lattice-aware. For every exposed
-    atom, solve the z that would put the adsorbate exactly at its target bond distance
-    (``sqrt(d² − lateral²)`` above it) and take the largest. The winning atom is then the
-    binding constraint and every other one is at or beyond its own bond distance, so the
-    placement clears the whole neighbourhood rather than a single reference atom.
-
-    Solving against the *nearest* atom instead is ambiguous exactly where it matters: a
-    bridge site is equidistant from both flanking atoms by construction, so when those sit
-    at different heights (the bridging O vs the recessed Ti on rutile(110)) the tie-break
-    moves the adsorbate by over an Å and can drop it inside the higher neighbour.
-
-    When no exposed atom is within its bond distance laterally there is nothing to solve
-    against — fall back to ``min_normal_height`` above the laterally closest one.
-    """
-    L = structure.lattice
-    frac = structure.frac_coords
-    cart = structure.cart_coords
-    cf = L.get_fractional_coords(coord)
-    solved: "float | None" = None
-    nearest_i, nearest_lat = None, 1e9
-    for i in pool:
-        d = frac[i] - cf
-        d[:2] -= np.round(d[:2])  # min-image in-plane
-        lateral = float(np.linalg.norm((d @ L.matrix)[:2]))
-        if lateral < nearest_lat:
-            nearest_i, nearest_lat = i, lateral
-        target = _target_distance(str(structure[i].specie), adsorbate_symbol, config)
-        if lateral < target:
-            z = cart[i][2] + (target**2 - lateral**2) ** 0.5
-            if solved is None or z > solved:
-                solved = z
-    if solved is not None:
-        return float(solved), nearest_i
-    if nearest_i is None:
-        return float(coord[2]), None
-    return float(cart[nearest_i][2] + config.min_normal_height), nearest_i
+# Computes the z height below which slab atoms count as frozen bulk; shared by the freeze
+# itself and every site enumerator, so "frozen region" means the same thing everywhere.
+def bottom_cutoff_z(
+    structure: Structure, fraction: float, always_free: "set[int] | None" = None
+) -> "float | None":
+    if not 0.0 < fraction <= 1.0: # fraction = 0 means no freezing
+        return None
+    always_free = always_free or set() # adsorbates / atom index excluded from the slab
+    slab_z = [s.coords[2] for i, s in enumerate(structure) if i not in always_free] # construct a list of all slab item heights, ignoring adsorbates 
+    zmin, zmax = min(slab_z), max(slab_z)
+    return zmin + fraction * (zmax - zmin)
 
 
+# Freezes the bottom fraction of the slab at bulk positions in-place, mimicking bulk
+# hardness while the top (free) face is left to relax.
+def apply_bottom_freeze(
+    structure: Structure, fraction: float, always_free: "set[int] | None" = None
+) -> None:
+    cutoff = bottom_cutoff_z(structure, fraction, always_free)
+    if cutoff is None:
+        return  # freezing disabled → leave every atom free
+    always_free = always_free or set()
+    flags = [] # list of each atoms free/frozen status
+    for i, site in enumerate(structure):
+        frozen = i not in always_free and site.coords[2] <= cutoff + 1e-6
+        flags.append([not frozen] * 3)  # [F,F,F] = fixed, [T,T,T] = free
+    structure.add_site_property("selective_dynamics", flags)  # pymatgen's POSCAR writer turns these True/False into T/F text later
+
+
+_CN_CUTOFF = 2.6  # Coordination atom cutoff, Å; first cation-anion shell. Verified for rutile-family MO2s
+
+
+# Computes each atom's (element, coordination deficit, coordination) — the data behind
+# site_label and site ranking. Also shared by both the vacancy and adsorbate stages. etc. [0, [Ti,1,5]] = Ti5c
+def _site_environments(substrate: Structure) -> "dict[int, tuple[str, int, int]]":
+    coordination = {
+        i: sum(1 for nb in shell if str(nb.specie) != str(substrate[i].specie))
+        for i, shell in enumerate(substrate.get_all_neighbors(_CN_CUTOFF))
+    }
+    bulk: dict[str, int] = {}
+    for i, c in coordination.items():
+        element = str(substrate[i].specie)
+        bulk[element] = max(bulk.get(element, 0), c)
+    return {
+        i: (str(substrate[i].specie), bulk[str(substrate[i].specie)] - c, c)
+        for i, c in coordination.items()
+    }
+
+
+# Formats a surface atom's element + coordination number into the literature-style label (ex. Ti5c)
+def site_label(element: str, coordination: int) -> str:
+    return f"{element}{coordination}c"
+
+
+# Returns indices of atoms with a clear line of sight to vacuum from above — exposed if no atom
+# sits occlusion_dz higher within block_radius laterally. Depth only pre-filters the scan region for cost; 
+# the occlusion test does the real work. Shared by the vacancy stage (which O counts as removable) 
+# and the adsorbate stage where a fragment can land).
 def exposed_surface_atoms(
     structure: Structure,
     depth: float,
-    block_radius: float,
+    block_radius: float = 1.3,  # Å; verified stable 0.8-2.0 A across all 8 rutile-family materials
     occlusion_dz: float = 0.3,
 ) -> "set[int]":
-    """Indices of atoms exposed to the vacuum from the +z (top) side.
-
-    An atom is *exposed* if no other atom sits above it (``occlusion_dz`` higher in z)
-    within ``block_radius`` laterally (min-image xy). This is a geometric line-of-sight
-    test, not a height window: it catches recessed-but-accessible cations (e.g. rutile
-    5-fold Ti) that a top-slice would miss, while naturally excluding subsurface atoms
-    (occluded by the layers above) and the bottom face (occluded by the whole slab).
-    ``depth`` restricts the scan to the top region for cost; the occlusion test does the
-    real work.
-    """
     L = structure.lattice
     cart = structure.cart_coords
     frac = structure.frac_coords
@@ -123,52 +105,11 @@ def exposed_surface_atoms(
             exposed.add(i)
     return exposed
 
+# --- Slab ---------------------------------------------------------------------------------
 
-def bottom_cutoff_z(
-    structure: Structure, fraction: float, always_free: "set[int] | None" = None
-) -> "float | None":
-    """z below which slab atoms are frozen, or ``None`` when freezing is disabled.
-
-    The cutoff is measured over the *slab* atoms only (``always_free`` — e.g. an adsorbate
-    placed above the surface — is excluded from the z-range). Shared by the freeze itself
-    and by the site enumerators, so "frozen region" means the same thing everywhere.
-    """
-    if not 0.0 < fraction <= 1.0:
-        return None
-    always_free = always_free or set()
-    slab_z = [s.coords[2] for i, s in enumerate(structure) if i not in always_free]
-    zmin, zmax = min(slab_z), max(slab_z)
-    return zmin + fraction * (zmax - zmin)
-
-
-def apply_bottom_freeze(
-    structure: Structure, fraction: float, always_free: "set[int] | None" = None
-) -> None:
-    """Fix the bottom ``fraction`` of the slab's atomic thickness at bulk positions.
-
-    Standard DFT surface convention (F2B-style asymmetric slab): the lower part of the
-    slab is held at bulk geometry to mimic bulk hardness while the top relaxes toward
-    vacuum. Implemented as a pymatgen ``selective_dynamics`` site property — the POSCAR
-    writer emits the flags and ASE reads them straight into ``FixAtoms`` in the worker,
-    so no backend change is needed. In-place; sets ``selective_dynamics`` on every site.
-    """
-    cutoff = bottom_cutoff_z(structure, fraction, always_free)
-    if cutoff is None:
-        return  # freezing disabled / degenerate → leave every atom free (no property set)
-    always_free = always_free or set()
-    flags = []
-    for i, site in enumerate(structure):
-        frozen = i not in always_free and site.coords[2] <= cutoff + 1e-6
-        flags.append([not frozen] * 3)  # [F,F,F] = fixed, [T,T,T] = free
-    structure.add_site_property("selective_dynamics", flags)
-
-
+# Cuts the configured facet/termination from a relaxed bulk, replicates it to the configured
+# supercell, and freezes the bottom fraction at bulk positions.
 def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
-    """Cut the pinned facet/termination from a relaxed bulk → unrelaxed slab.
-
-    Then replicate laterally to the configured supercell (coverage dilution for defects
-    and adsorbates) and freeze the bottom fraction of the slab at bulk positions.
-    """
     gen = SlabGenerator(
         bulk,
         miller_index=config.miller_index,
@@ -193,50 +134,34 @@ def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
     return slab
 
 
+# --- Vacancy -------------------------------------------------------------------------------
+
+# One unrelaxed structure with a single oxygen removed plus which symmetry-distinct site 
 @dataclass
 class VacancyCandidate:
-    """One symmetry-distinct O-vacancy: the decorated (unrelaxed) structure + site id."""
-
     structure: Structure
     site_id: dict  # {symmetry_class, frac_coord, site_index}
 
 
+# Builds one vacancy candidate per symmetry-distinct surface oxygen site, by removing each
+# in turn from its own copy of the slab.
 def oxygen_vacancy_candidates(
     slab: Structure, symprec: float = 0.1, freeze_bottom_fraction: float = 0.0,
-    max_sites: int | None = None, surface_depth: float | None = 1.8,
+    block_radius: float | None = 1.3,
 ) -> list[VacancyCandidate]:
-    """decorate(slab, O-removal) → one candidate per symmetry-distinct O site.
-
-    Deterministic order (by originating site index) so that two models decorating the
-    *same* substrate produce aligned candidate lists (seeded per-stage matching).
-    ``freeze_bottom_fraction`` re-imposes the slab's bottom-layer freeze on each
-    candidate so the relaxation keeps the F2B convention, and drops O classes that live
-    entirely inside the frozen region — a vacancy that cannot relax is not a meaningful
-    candidate.
-
-    ``surface_depth`` (Å below the topmost atom; ``SlabConfig.vacancy_surface_depth``)
-    keeps only O near the surface — on rutile(110) the bridging O2c and the in-plane O3c.
-    ``None`` enumerates everything, which is dominated by subsurface bulk O and can win
-    the funnel outright; see the config note. Measured from the topmost atom, the same
-    reference ``AdsorbateConfig.surface_depth`` uses.
-
-    Each class is represented by its TOPMOST member, not its lowest-indexed one. The slab
-    has two surfaces and the adsorbate only ever lands on the top, so a bridging-O class
-    spanning both must contribute the vacancy on the face being studied. Site index runs
-    bottom-up, so choosing by index instead put the vacancy on the *bottom* surface
-    whenever the freeze cutoff left it in play (every class, at ``--freeze 0``).
-    """
     sga = SpacegroupAnalyzer(slab, symprec=symprec)
     sym = sga.get_symmetrized_structure()
     wyckoffs = getattr(sym, "wyckoff_symbols", None)
     cutoff = bottom_cutoff_z(slab, freeze_bottom_fraction)
-    z_top = max(s.coords[2] for s in slab)  # surface reference for ``surface_depth``
-    # Coordination of the O being removed, so a vacancy can be named the way literature
-    # names it: on rutile(110) the classic defect is a missing bridging O2c, and an O3c
-    # vacancy is a different (in-plane, much less favourable) thing entirely.
+    z = slab.cart_coords[:, 2]
+    exposed = (
+        exposed_surface_atoms(slab, depth=float(z.max() - z.min()), block_radius=block_radius)
+        if block_radius is not None else None
+    )
     environments = _site_environments(slab)
-
     candidates: list[VacancyCandidate] = []
+
+    # Iterate through different groups of atoms with equivalent geometry, scan for non-frozen exposed surface oxygens
     for group_idx, group in enumerate(sym.equivalent_indices):
         if str(slab[group[0]].specie) != "O":
             continue
@@ -245,10 +170,10 @@ def oxygen_vacancy_candidates(
             members = [i for i in members if slab[i].coords[2] > cutoff + 1e-6]
             if not members:
                 continue  # this O class lives only in the frozen region — skip it
-        # Topmost, not lowest-indexed: the adsorbate stage only ever sees the top face.
-        rep = max(members, key=lambda i: slab[i].coords[2])
-        if surface_depth is not None and z_top - slab[rep].coords[2] > surface_depth:
-            continue  # too deep to be a surface vacancy
+        rep = max(members, key=lambda i: slab[i].coords[2]) # Topmost, not lowest-indexed: the adsorbate stage only ever sees the top face.
+        if exposed is not None and rep not in exposed:
+            continue  # not visible from vacuum -> not a surface vacancy
+       
         vac = slab.copy()
         vac.remove_sites([rep])
         apply_bottom_freeze(vac, freeze_bottom_fraction)
@@ -267,186 +192,158 @@ def oxygen_vacancy_candidates(
         )
     if not candidates:
         raise RuntimeError(
-            f"no oxygen within {surface_depth} A of the top of this slab — check the "
-            "termination, or raise/clear SlabConfig.vacancy_surface_depth to enumerate "
-            "deeper O as well"
-            if surface_depth is not None
+            "no oxygen exposed to vacuum on this slab — check the termination, or "
+            "raise/clear SlabConfig.vacancy_block_radius to enumerate subsurface O too"
+            if block_radius is not None
             else "no symmetry-distinct oxygen sites found on slab"
         )
     candidates.sort(key=lambda c: c.site_id["site_index"])
-    # Smoke-test cap. Deliberately a plain head slice, not a spread like the adsorbate
-    # sampler: vacancy classes are already symmetry-distinct, so there is no clustering to
-    # correct for, and keeping the lowest site indices stays deterministic. It CAN drop the
-    # true minimum-energy vacancy, so capped runs are for plumbing checks, not for numbers.
-    return candidates[:max_sites] if max_sites else candidates
+    return candidates
 
 
-@dataclass
-class AdsorbateCandidate:
-    """One adsorption-site placement: the decorated (unrelaxed) structure + site id.
+# --- Adsorbate placement: how high above a site to place the fragment ---------------------
 
-    Same ``.structure`` / ``.site_id`` contract as ``VacancyCandidate`` so both flow
-    through the pipeline's shared funnel (the ``decorate`` seam).
-    """
+# Computes sum of covalent radii as part of a guess for placement height above surface atom
+def _covalent_height(surface_symbol: str, adsorbate_symbol: str) -> float:
+    return float(
+        covalent_radii[atomic_numbers[surface_symbol]]
+        + covalent_radii[atomic_numbers[adsorbate_symbol]]
+    )
 
-    structure: Structure
-    site_id: dict  # {symmetry_class(=position type), frac_coord, site_index}
-
-
-_CN_CUTOFF = 2.6  # Å; first cation-anion shell (rutile Ti-O is 1.95-2.00, second shell is >3)
-
-
-def site_label(element: str, coordination: int) -> str:
-    """Literature-style coordination label for a surface atom, e.g. ``"Ti5c"``.
-
-    The standard surface-science shorthand: element symbol, number of counter-ion nearest
-    neighbours, then "c" for coordinate. On rutile(110) the reactive sites are the
-    five-coordinate cation ``Ti5c`` (bulk Ti is octahedral, 6-coordinate) and the bridging
-    oxygen ``O2c`` (bulk O is 3-coordinate); ``Ti6c`` and ``O3c`` are bulk-like and inert.
-
-    What counts as undercoordinated is a property of the structure, not of the element —
-    in a tetrahedral oxide ``M4c`` would be the saturated one. That is why the pipeline
-    ranks sites by *deficit* (see ``_site_environments``) and uses this label only for
-    reporting: the label is what you compare against a paper, the deficit is what drives
-    the sampling.
-    """
-    return f"{element}{coordination}c"
+# Returns height placed above surface atom for adsorbate. Depends on the chemistry and preset standoff.
+def _target_distance(
+    surface_symbol: str, adsorbate_symbol: str, config: AdsorbateConfig
+) -> float:
+    return _covalent_height(surface_symbol, adsorbate_symbol) + config.seed_standoff
 
 
-def _site_environments(substrate: Structure) -> "dict[int, tuple[str, int, int]]":
-    """(element, coordination deficit, coordination) per atom — a surface site's identity.
+# Takes a site's x,y + pool of exposed atom indices; returns (height, nearest exposed atom)
+# for the adsorbate's binding atom. Height = tallest of every exposed atom's own required
+# bond distance, so the placement clears the whole neighbourhood not just one reference atom.
+# "Nearest" is tracked separately by pure lateral distance — on a bridge site (equidistant
+# from both flanking atoms by construction) it can differ from the atom that set the height.
+def _placement_z(
+    structure: Structure,
+    coord,
+    pool: "set[int]",
+    adsorbate_symbol: str,
+    config: AdsorbateConfig,
+) -> "tuple[float, int | None]":
+    L = structure.lattice
+    frac = structure.frac_coords
+    cart = structure.cart_coords
+    cf = L.get_fractional_coords(coord)  # site's x,y in fractional coords
+    solved: "float | None" = None  # tallest required height found so far
+    nearest_i, nearest_lat = None, 1e9  # closest exposed atom by lateral distance alone
+    for i in pool:
+        d = frac[i] - cf
+        d[:2] -= np.round(d[:2])  # min-image in-plane
+        lateral = float(np.linalg.norm((d @ L.matrix)[:2]))  # sideways-only distance to atom i
+        if lateral < nearest_lat:
+            nearest_i, nearest_lat = i, lateral  # track closest atom regardless of bonding
+        target = _target_distance(str(structure[i].specie), adsorbate_symbol, config)  # this atom's own bond distance
+        if lateral < target:  # only atoms close enough to actually constrain the height
+            z = cart[i][2] + (target**2 - lateral**2) ** 0.5  # height that puts adsorbate exactly at target dist
+            if solved is None or z > solved:
+                solved = z  # keep the tallest (binding) requirement
+    if solved is not None:
+        return float(solved), nearest_i  # height solved by some atom's bond distance
+    if nearest_i is None:
+        return float(coord[2]), None  # no exposed atoms at all — nothing to reference
+    return float(cart[nearest_i][2] + config.min_normal_height), nearest_i  # fallback: flat offset above nearest atom
 
-    Deficit is counted against the most-coordinated atom of the same element in the cell,
-    which is bulk-like by construction, so undercoordinated surface atoms score higher
-    without hard-coding any polymorph's bulk coordination numbers. On rutile(110) this
-    separates the reactive Ti5c and bridging O2c from the saturated Ti6c and O3c.
 
-    The absolute coordination is carried alongside so the site can also be *named* the way
-    literature names it (``site_label``). Deficit drives selection because it is
-    material-agnostic; the absolute number is for the human reading the output.
-    """
-    coordination = {
-        i: sum(1 for nb in shell if str(nb.specie) != str(substrate[i].specie))
-        for i, shell in enumerate(substrate.get_all_neighbors(_CN_CUTOFF))
-    }
-    bulk: dict[str, int] = {}
-    for i, c in coordination.items():
-        element = str(substrate[i].specie)
-        bulk[element] = max(bulk.get(element, 0), c)
-    return {
-        i: (str(substrate[i].specie), bulk[str(substrate[i].specie)] - c, c)
-        for i, c in coordination.items()
-    }
-
-
+# Takes placed (coord, anchor) pairs + a cap n; returns n of them chosen to be spread out
+# and chemistry-aware, not just pymatgen's spatially-clustered enumeration order (which can
+# sample the same environment 3x and miss the canonical site entirely — see site_label).
+# Seeds one site per distinct environment first (most undercoordinated first, since that's
+# where binding happens), then fills the rest by farthest-point spread. Deterministic.
 def _spread_sites(placed: list, n: int | None, lattice, substrate: Structure,
                   environments: dict | None = None) -> list:
-    """Keep ``n`` of the ``(coord, site atom)`` pairs: one per environment, then spread.
-
-    A plain ``[:n]`` slice takes pymatgen's enumeration order, which is spatially
-    correlated: on a 4x2 rutile(110) cell the first three bridge sites land inside a
-    ~1 A patch, so "3 bridge sites" is really one environment sampled three times.
-    Farthest-point sampling fixes the clustering but is blind to chemistry, and that loses
-    the site the run exists to measure: only 3 of 16 ontop sites on the rutile(110) vacancy
-    substrate sit over a 5-fold Ti, so every cap below 6 dropped the canonical adsorption
-    site while keeping four views of the same O-topped environment.
-
-    So seed one site per distinct environment first, most coordinatively unsaturated first
-    — that is where an adsorbate binds, and it puts Ti5c ahead of Ti6c even though pymatgen
-    enumerates a Ti6c site first — then fill the remaining budget by farthest-point spread.
-
-    Deterministic — same input order gives the same subset, so runs stay reproducible.
-    """
     if n is None or n >= len(placed):
-        return list(placed)
+        return list(placed)  # no cap needed, keep everything
 
+    # Lateral (x,y) min-image distance between two placed coords; z is set by _placement_z.
     def _sep(a, b) -> float:
-        """Lateral (ab-plane) min-image distance; z is set later by _placement_z."""
         f = lattice.get_fractional_coords(np.asarray(a) - np.asarray(b))
         f[2] = 0.0
         f -= np.round(f)
         return float(np.linalg.norm(f @ lattice.matrix))
 
-    environments = environments if environments is not None else _site_environments(substrate)
+    environments = environments if environments is not None else _site_environments(substrate)  # reuse if caller already has it
 
+    # This placed site's (element, deficit, coordination) — the environment it's grouped by.
     def _env(i: int) -> "tuple[str, int, int]":
         site_atom = placed[i][1]
         return environments[site_atom] if site_atom is not None else ("", -1, -1)
 
     remaining = list(range(len(placed)))  # indices: coords are arrays, so `in`/`remove` break
     kept: list[int] = []
+    # Seed: one representative per distinct environment, most undercoordinated (highest deficit) first.
     for env in sorted(dict.fromkeys(_env(i) for i in remaining), key=lambda e: -e[1]):
         if len(kept) == n:
-            break
-        first = next(i for i in remaining if _env(i) == env)
+            break  # budget already filled during seeding
+        first = next(i for i in remaining if _env(i) == env)  # first placed site with this environment
         remaining.remove(first)
         kept.append(first)
+    # Fill whatever budget is left with whichever remaining site is farthest from everything kept.
     while len(kept) < n and remaining:
         far = max(remaining, key=lambda i: min(_sep(placed[i][0], placed[k][0]) for k in kept))
         remaining.remove(far)
         kept.append(far)
-    return [placed[i] for i in kept]
+    return [placed[i] for i in kept]  # back to (coord, anchor) pairs
 
 
+# --- Adsorbate: candidates ------------------------------------------------------------
+
+# One unrelaxed structure with a fragment placed at a single surface site, plus which site
+# it landed on. Same .structure/.site_id contract as VacancyCandidate, for the shared funnel.
+@dataclass
+class AdsorbateCandidate:
+    structure: Structure
+    site_id: dict  # {symmetry_class(=position type), frac_coord, site_index}
+
+
+# Takes a substrate + adsorbate config; returns one AdsorbateCandidate per distinct exposed
+# site (ontop/bridge/hollow). Sites come from a Delaunay triangulation over exposed_surface_atoms
+# (not pymatgen's default height window, which misses recessed cations like rutile's 5-fold Ti).
+# Placed at every symmetry-reduced site of each type so the funnel's ranking finds the real
+# binding site, not just whichever pymatgen lists first. Unrelaxed by construction.
 def adsorbate_candidates(
     substrate: Structure, config: AdsorbateConfig, freeze_bottom_fraction: float = 0.0
 ) -> list[AdsorbateCandidate]:
-    """decorate(substrate, adsorbate placement) → one candidate per distinct surface site.
-
-    Sites come from a Delaunay triangulation over the atoms the vacuum can *see*
-    (``exposed_surface_atoms``), not over pymatgen's default height window. That matters on
-    a rumpled oxide: the window admits only the topmost row (the bridging O's on
-    rutile(110)), so the 5-fold Ti sitting ~1 Å lower — the canonical adsorption site —
-    never becomes a vertex, and every bridge/hollow is a midpoint of the top-O mesh alone.
-    Feeding the exposed set in instead makes Ti ontop, Ti–O bridge and hollow sites all
-    first-class candidates from one algorithm.
-
-    The fragment is placed at *every* symmetry-reduced representative of each requested type
-    — AdsorbML's "try several, keep the minimum" philosophy without its dependencies —
-    so the funnel's energy ranking discovers the real binding site instead of betting the
-    run on whichever site pymatgen happened to list first. Placements are unrelaxed by
-    construction; relaxation is the backend's job. Enumerating on the *same* substrate
-    yields the same ordered site list for both models, so seeded per-site matching aligns
-    (as with vacancies).
-
-    ``freeze_bottom_fraction`` re-imposes the slab's bottom-layer freeze after the plain
-    rebuild (which drops site properties); the adsorbate atoms sit above the surface and
-    are always left mobile. It also restricts placement to the free (top) surface — an
-    adsorbate on the frozen face would sit against rigid atoms and cannot relax.
-    """
-    molecule = Molecule(list(config.species), [list(c) for c in config.coords])
-    n_ads = len(molecule)
+    molecule = Molecule(list(config.species), [list(c) for c in config.coords])  # the fragment as a rigid molecule
+    n_ads = len(molecule)  # atom count of the fragment
     ads_symbol = str(config.species[0])  # the binding atom (coords[0]); sets placement height
     exposed = exposed_surface_atoms(
         substrate, config.surface_depth, config.exposure_block_radius
-    )
+    )  # which atoms a fragment could actually land on
     # pymatgen's assign_site_properties returns the slab untouched when surface_properties
     # is already present — that's the seam we use to substitute our own surface-atom set.
     props = ["surface" if i in exposed else "subsurface" for i in range(len(substrate))]
-    asf = AdsorbateSiteFinder(substrate.copy(site_properties={"surface_properties": props}))
-    cutoff = bottom_cutoff_z(substrate, freeze_bottom_fraction)
+    asf = AdsorbateSiteFinder(substrate.copy(site_properties={"surface_properties": props}))  # pymatgen's site-finder, using our exposed set
+    cutoff = bottom_cutoff_z(substrate, freeze_bottom_fraction)  # frozen/free boundary for this substrate
     L = substrate.lattice
     # Computed once here rather than per position type inside _spread_sites, and reused to
     # name each surviving site the way literature would (Ti5c, O2c, ...).
     environments = _site_environments(substrate)
 
-    candidates: list[AdsorbateCandidate] = []
+    candidates: list[AdsorbateCandidate] = []  # accumulates the final results
 
+    # Smallest adsorbate-slab distance as a fraction of covalent bond length; <1.0 means
+    # inside bonding range, well below means inside an atom (unphysical, unrecoverable start).
     def _clearance(structure: Structure) -> float:
-        """Smallest adsorbate–slab distance as a fraction of that pair's covalent bond
-        length. Below 1.0 the adsorbate is inside bonding range; well below it is *inside*
-        a surface atom, which is an unphysical start no relaxation can be trusted to fix."""
         frac = structure.frac_coords
-        worst = 1e9
-        for i in range(len(structure) - n_ads, len(structure)):
-            for j in range(len(structure) - n_ads):
+        worst = 1e9  # smallest ratio found so far (start impossibly large)
+        for i in range(len(structure) - n_ads, len(structure)):  # the adsorbate atoms (appended last)
+            for j in range(len(structure) - n_ads):  # every slab atom
                 d = frac[i] - frac[j]
                 d -= np.round(d)  # full min-image
-                dist = float(np.linalg.norm(d @ structure.lattice.matrix))
+                dist = float(np.linalg.norm(d @ structure.lattice.matrix))  # real 3D distance, this pair
                 worst = min(
                     worst,
                     dist
-                    / _covalent_height(str(structure[j].specie), str(structure[i].specie)),
+                    / _covalent_height(str(structure[j].specie), str(structure[i].specie)),  # ratio to expected bond length
                 )
         return worst
 

@@ -155,7 +155,7 @@ def check(identifier: str, cfg: RunConfig) -> dict:
     try:
         vacs = oxygen_vacancy_candidates(
             slab, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
-            surface_depth=cfg.slab.vacancy_surface_depth,
+            block_radius=cfg.slab.vacancy_block_radius,
         )
         res["n_vacancy_sites"] = len(vacs)
         res["vacancy_classes"] = sorted({v.site_id["symmetry_class"] for v in vacs})

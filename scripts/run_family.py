@@ -81,7 +81,7 @@ def _plan(materials: list[str], cfg: RunConfig, protocols: tuple[str, ...],
             slab = make_slab(get_structure(m), cfg.slab)
             vacs = oxygen_vacancy_candidates(
                 slab, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
-                surface_depth=cfg.slab.vacancy_surface_depth,
+                block_radius=cfg.slab.vacancy_block_radius,
             )
             ads = adsorbate_candidates(
                 vacs[0].structure, cfg.adsorbate,

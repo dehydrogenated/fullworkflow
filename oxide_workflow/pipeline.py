@@ -42,8 +42,8 @@ slab geometry -> SlabConfig
 screening
     --adsorbate         H | CO | H2O | O2 | O2-side | O (default: AdsorbateConfig pins H)
     --max-sites         adsorbate sites kept per position type (default: all)
-    --vacancy-depth     Å below the top an O can sit and still be a surface vacancy
-                        (default 1.8 = bridging O2c + in-plane O3c; 0 = no limit)
+    --vacancy-block-radius  Å; how close a taller neighbor blocks vacuum line-of-sight
+                        (default 1.3, same test as adsorbate placement; 0 = no limit)
 
 relaxation -> RelaxConfig
     --fmax          force convergence, eV/A (default 0.02)
@@ -774,7 +774,7 @@ def _run_reference_chain(
     mu_o = oxygen_chemical_potential(ref, cfg, relax, cachedir=gas_cache)
 
     ref_vac = _run_funnel(
-        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, surface_depth=cfg.slab.vacancy_surface_depth), ref, stage="vacancy",
+        oxygen_vacancy_candidates(ref_slab.structure, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction, block_radius=cfg.slab.vacancy_block_radius), ref, stage="vacancy",
         protocol="reference", geometry_source="cut_from_relaxed_slab", cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
         e_vac_reference=(ref_slab.energy, mu_o),
@@ -890,7 +890,7 @@ def _run_protocol_chain(
 
     # ---- vacancy funnel --------------------------------------------------------------
     c_vac = _run_funnel(
-        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, surface_depth=cfg.slab.vacancy_surface_depth), cand,
+        oxygen_vacancy_candidates(vac_substrate, freeze_bottom_fraction=frozen, block_radius=cfg.slab.vacancy_block_radius), cand,
         stage="vacancy", protocol=protocol, geometry_source=src["vacancy"], cfg=cfg,
         outdir=outdir, candidates_table=cand_table,
         e_vac_reference=(e_pristine, mu_o),
@@ -1323,10 +1323,10 @@ if __name__ == "__main__":
              "fragment inside bonding range; too large and it never interacts.",
     )
     parser.add_argument(
-        "--vacancy-depth", type=float, metavar="A",
-        help=f"how deep below the top an O can sit and still count as a surface vacancy "
-             f"(default {_slab.vacancy_surface_depth}, which keeps the bridging O2c "
-             f"and the in-plane O3c). 0 = no limit, enumerating subsurface O too.",
+        "--vacancy-block-radius", type=float, metavar="A",
+        help=f"how close a taller neighbor can sit before it blocks an O's line of sight "
+             f"to vacuum (default {_slab.vacancy_block_radius}; same test as adsorbate "
+             f"placement). 0 = no limit, enumerating subsurface O too.",
     )
     parser.add_argument(
         "--fmax", type=float,
@@ -1369,10 +1369,10 @@ if __name__ == "__main__":
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, max_per_position=args.max_sites))
     if args.seed_standoff is not None:
         cfg = replace(cfg, adsorbate=replace(cfg.adsorbate, seed_standoff=args.seed_standoff))
-    if args.vacancy_depth is not None:
+    if args.vacancy_block_radius is not None:
         # 0 clears the limit; argparse can't express "None means unset" for a float flag.
         cfg = replace(cfg, slab=replace(
-            cfg.slab, vacancy_surface_depth=args.vacancy_depth or None))
+            cfg.slab, vacancy_block_radius=args.vacancy_block_radius or None))
     slab_over = {}
     if args.termination is not None:
         slab_over["termination_index"] = args.termination
