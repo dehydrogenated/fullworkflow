@@ -116,17 +116,21 @@ def main(jobfile: str) -> None:
         traj.unlink()
     write(traj, atoms, format="extxyz", append=True)  # frame 0 = initial (calc already primed)
 
-    # Optional early-stop: at desorb_check_step, compare the ANCHOR atom's distance to the
-    # surface against its starting distance (see anchor_surface_distance -- deliberately not
-    # the whole fragment, so a legitimate reorientation of the far atoms doesn't get flagged
-    # as desorption). Net outward drift of the anchor by then means the bond itself is
-    # breaking, not just the molecule reorienting (see checks.py's post-hoc "adsorbate
-    # desorbed" flag, which this complements by catching the same failure mode *during*
-    # relaxation instead of after burning the full step budget on it).
+    # Optional early-stop: at desorb_check_step, compare the ANCHOR atom's CURRENT distance
+    # to the surface against its distance desorb_trend_window steps earlier -- a RECENT
+    # trend, not "vs. the very start". A molecule can legitimately drift outward for a while
+    # while reorienting and then turn back in; comparing only against t=0 would still read
+    # as "farther than start" and wrongly kill a trajectory that has already turned around.
+    # Comparing against the recent window instead asks "is it moving away RIGHT NOW", which
+    # is what actually distinguishes an in-progress reorientation from real desorption. Uses
+    # anchor_surface_distance, not the whole fragment, so the far atoms swinging around
+    # during that same reorientation don't contaminate the signal either (see its docstring).
     n_ads = spec.get("desorb_check_n_ads")
     check_step = spec.get("desorb_check_step")
+    trend_window = int(spec.get("desorb_trend_window", 20))
+    trend_ref_step = max(check_step - trend_window, 0) if check_step and n_ads else None
+    d_trend_ref = None
     early_stopped_desorbing = False
-    d_start = anchor_surface_distance(atoms, n_ads) if n_ads and check_step else None
 
     # The reverse case: max_steps runs out unconverged, but the adsorbate is still
     # net-approaching the surface (real work still happening, not oscillation) -- checked
@@ -146,9 +150,11 @@ def main(jobfile: str) -> None:
     t0 = time.time()
     if n_ads and (check_step or extend_if_approaching):
         for _converged in opt.irun(fmax=fmax, steps=max_steps):
+            if trend_ref_step is not None and opt.nsteps == trend_ref_step:
+                d_trend_ref = anchor_surface_distance(atoms, n_ads)
             if check_step and opt.nsteps == check_step:
                 d_now = anchor_surface_distance(atoms, n_ads)
-                if d_now > d_start:
+                if d_trend_ref is not None and d_now > d_trend_ref:
                     early_stopped_desorbing = True
                     break
             if extend_window_step is not None and opt.nsteps == extend_window_step:

@@ -75,6 +75,7 @@ def relax(
     relax_cell: bool = False, # True relaxes both lattice and atomic positions, should only be true for bulk relaxation
     desorb_check_n_ads: int | None = None,  # last N atoms are the mobile adsorbate
     desorb_check_step: int | None = None,  # step at which to test for net outward drift
+    desorb_trend_window: int = 20,  # compare against this many steps earlier, not vs. start
     extend_if_approaching: bool = False,  # give max_steps one extension if still closing in
     extend_steps: int = 100,
     max_extensions: int = 1,  # repeatable up to this many rounds, each requiring progress
@@ -107,6 +108,7 @@ def relax(
         "trajectory_xyz": "trajectory.xyz",
         "desorb_check_n_ads": desorb_check_n_ads,
         "desorb_check_step": desorb_check_step,
+        "desorb_trend_window": desorb_trend_window,
         "extend_if_approaching": extend_if_approaching,
         "extend_steps": extend_steps,
         "max_extensions": max_extensions,

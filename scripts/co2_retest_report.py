@@ -30,12 +30,14 @@ def status_of(row: dict) -> str:
     if row.get("failed"):
         return "FAILED"
     if row.get("desorbing"):
-        return "desorbing"
+        return "desorbing (early-stop)" if row.get("desorbing_early_stop") else "desorbing (final geometry)"
     if row.get("converged") is False:
         return "unconverged (not flagged either way)"
+    if row.get("trivial_start"):
+        return "adsorbed (trivial start -- no real work done)"
     if row.get("extended"):
-        return "converged (extended)"
-    return "converged"
+        return "adsorbed (extended)"
+    return "adsorbed"
 
 
 def main(rundir: Path) -> None:
@@ -63,18 +65,20 @@ def main(rundir: Path) -> None:
     by_pair: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for r in rows:
         by_pair[(r["model"], r["oxide"])].append(r)
-    print(f"{'model':16s}{'oxide':8s}{'n':>4s}{'ok':>5s}{'desorb':>8s}{'extend':>8s}"
-          f"{'unconv':>8s}{'fail':>6s}{'min angle':>11s}")
+    print(f"{'model':16s}{'oxide':8s}{'n':>4s}{'ads':>5s}{'desorb':>8s}{'d_early':>8s}"
+          f"{'trivial':>8s}{'extend':>8s}{'unconv':>8s}{'fail':>6s}{'min angle':>11s}")
     for (model, oxide), rs in sorted(by_pair.items()):
-        ok = sum(1 for r in rs if status_of(r) in ("converged", "converged (extended)"))
-        desorb = sum(1 for r in rs if status_of(r) == "desorbing")
+        ads = sum(1 for r in rs if r.get("adsorbed"))
+        desorb = sum(1 for r in rs if r.get("desorbing"))
+        d_early = sum(1 for r in rs if r.get("desorbing_early_stop"))
+        trivial = sum(1 for r in rs if r.get("trivial_start"))
         extend = sum(1 for r in rs if r.get("extended"))
-        unconv = sum(1 for r in rs if status_of(r) == "unconverged (not flagged either way)")
+        unconv = sum(1 for r in rs if r.get("converged") is False and not r.get("desorbing"))
         fail = sum(1 for r in rs if r.get("failed"))
         angles = [r["oco_angle_deg"] for r in rs if r.get("oco_angle_deg") is not None]
         min_angle = f"{min(angles):.1f}" if angles else "-"
-        print(f"{model:16s}{oxide:8s}{len(rs):>4d}{ok:>5d}{desorb:>8d}{extend:>8d}"
-              f"{unconv:>8d}{fail:>6d}{min_angle:>11s}")
+        print(f"{model:16s}{oxide:8s}{len(rs):>4d}{ads:>5d}{desorb:>8d}{d_early:>8d}"
+              f"{trivial:>8d}{extend:>8d}{unconv:>8d}{fail:>6d}{min_angle:>11s}")
 
     # --- the actual science: did bending show up anywhere? --------------------------------
     print(f"\n{'-'*60}\nBENDING (O-C-O < {BENT_THRESHOLD_DEG} deg)\n{'-'*60}")

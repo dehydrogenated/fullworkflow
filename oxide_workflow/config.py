@@ -44,11 +44,13 @@ class AdsorbateConfig:
     min_clearance: float = 0.8  # reject a placement closer than this x the covalent bond length to any slab atom — the guard against spawning inside a surface atom
     symm_reduce: float = 0.01  # pymatgen: how close (fractional coords) before two sites merge
     max_per_position: int | None = None  # cap sites kept per position type (None = all); for smoke tests
-    # If set, check at this step whether the adsorbate has net-drifted farther from the
-    # surface than where it started; if so, stop the relaxation early and flag it as
-    # desorbing instead of burning the rest of max_steps on a trajectory that was never
-    # going to bind. None = disabled (default; existing runs are unaffected).
+    # If set, check at this step whether the adsorbate is farther from the surface than it
+    # was desorb_trend_window steps earlier -- a RECENT trend, not vs. the very start, so a
+    # molecule that drifted out while reorienting and has already turned back in isn't
+    # wrongly killed. Net outward drift *right now* means the site was never going to bind.
+    # None = disabled (default; existing runs are unaffected).
     desorb_early_stop_step: int | None = None
+    desorb_trend_window: int = 20
     # The reverse case: if max_steps runs out unconverged but the adsorbate is still
     # net-approaching the surface (genuinely still doing work, not just oscillating), give
     # it one extension of extend_steps more instead of calling it unconverged on a

@@ -409,6 +409,7 @@ def _relax_record(
         optimizer=cfg.relax.optimizer,
         desorb_check_n_ads=n_ads,
         desorb_check_step=desorb_check_step,
+        desorb_trend_window=cfg.adsorbate.desorb_trend_window,
         extend_if_approaching=extend_if_approaching,
         extend_steps=cfg.adsorbate.extend_steps,
         max_extensions=cfg.adsorbate.max_extensions,

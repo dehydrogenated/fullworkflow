@@ -89,6 +89,8 @@ OXIDES = {
 for _o in OXIDES.values():
     _o["lit_e_ads_eV"] = _o["lit_e_ads_kcal"] * KCAL_TO_EV
 
+ALL_OXIDES = tuple(OXIDES)  # for the --oxides flag's default/validation
+
 POLAR_TILT_DEG = 25.0
 N_AZIMUTH = 5
 # Fast convergence (8-36 steps) at the previous 1.2 A standoff meant CO2 was falling
@@ -96,9 +98,11 @@ N_AZIMUTH = 5
 # match literature's actual 5 A starting distance instead of guessing at an intermediate
 # value again (Ti-O covalent sum ~2.26 A + 2.8 A standoff =~ 5 A total).
 SEED_STANDOFF = 2.8
-DESORB_CHECK_STEP = 150  # more runway before concluding desorption from a farther start
+DESORB_CHECK_STEP = 100
+DESORB_TREND_WINDOW = 20  # compare distance at 100 against distance at 80, not against t=0
 EXTEND_STEPS = 100
 MAX_EXTENSIONS = 3  # repeatable: up to 300 + 3*100 = 600 steps for a genuinely long approach
+TRIVIAL_START_TOL = 1.0  # start_fmax within this multiple of fmax -> flag as no real work
 
 
 def azimuthal_orientations(structure, anchor_idx: int, n_ads: int):
@@ -229,6 +233,7 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                     oriented, backend, workdir=site_dir,
                     fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
                     desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
+                    desorb_trend_window=DESORB_TREND_WINDOW,
                     extend_if_approaching=True, extend_steps=EXTEND_STEPS,
                     max_extensions=MAX_EXTENSIONS,
                 )
@@ -237,8 +242,10 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                     "model": model, "oxide": oxide, "site_index": cand.site_id["site_index"],
                     "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                     "failed": True, "error": str(e)[:500],
-                    "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
+                    "e_ads_eV": None, "oco_angle_deg": None,
+                    "adsorbed": None, "desorbing": None,
                     "desorbing_early_stop": None, "desorbing_final_geometry": None,
+                    "trivial_start": None, "start_fmax": None,
                     "end_anchor_distance_A": None, "anchor_bond_length_A": None,
                     "extended": None, "extensions_used": None, "converged": None, "nsteps": None,
                 }
@@ -262,12 +269,20 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
             )
             desorbing = early_stopped or desorbed_final
             extended = bool(res.meta.get("extended"))
+            # Fast-convergence pathology (checks.py's "input already stationary; relaxation
+            # did no work"): if the starting force was already at/near fmax, whatever nsteps
+            # says "converged" tells you nothing -- there was nothing to relax in the first
+            # place. Independent of desorbing/adsorbed; can co-occur with either.
+            trivial_start = res.start_fmax <= TRIVIAL_START_TOL * cfg.relax.fmax
+            adsorbed = (not desorbing) and bool(res.converged)
             row = {
                 "model": model, "oxide": oxide, "site_index": cand.site_id["site_index"],
                 "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                 "failed": False, "error": None,
-                "e_ads_eV": e_ads, "oco_angle_deg": angle, "desorbing": desorbing,
+                "e_ads_eV": e_ads, "oco_angle_deg": angle,
+                "adsorbed": adsorbed, "desorbing": desorbing,
                 "desorbing_early_stop": early_stopped, "desorbing_final_geometry": desorbed_final,
+                "trivial_start": trivial_start, "start_fmax": res.start_fmax,
                 "end_anchor_distance_A": end_dist, "anchor_bond_length_A": bond_len,
                 "extended": extended, "extensions_used": res.meta.get("extensions_used", 0),
                 "converged": res.converged, "nsteps": res.nsteps,
@@ -275,15 +290,20 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
             rows.append(row)
             if desorbing:
                 status = "DESORBING(early)" if early_stopped else "DESORBING(final)"
+            elif extended:
+                status = "EXTENDED"
             else:
-                status = "EXTENDED" if extended else "OK"
+                status = "OK"
+            trivial_tag = " TRIVIAL_START" if trivial_start else ""
             print(f"    site{row['site_index']} {label:14s} E_ads={e_ads:+.4f} eV  "
                   f"angle={angle:6.1f}  {status:16s}"
-                  f"nsteps={res.nsteps}", flush=True)
+                  f"nsteps={res.nsteps}{trivial_tag}", flush=True)
     return rows
 
 
-def main(outdir: Path, fmax: float) -> None:
+def main(outdir: Path, fmax: float, oxides: list[str] = None, models: list[str] = None) -> None:
+    oxides = oxides or list(OXIDES)
+    models = models or MODELS
     co2_species, co2_coords = ADSORBATE_FRAGMENTS["CO2"]
     cfg = RunConfig()
     cfg = replace(cfg, adsorbate=replace(
@@ -293,6 +313,7 @@ def main(outdir: Path, fmax: float) -> None:
         # so nothing here is spent relaxing sites with no binding track record.
         positions=("ontop", "bridge", "hollow"), max_per_position=None,
         seed_standoff=SEED_STANDOFF, desorb_early_stop_step=DESORB_CHECK_STEP,
+        desorb_trend_window=DESORB_TREND_WINDOW,
         extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
     ))
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=fmax))
@@ -305,8 +326,8 @@ def main(outdir: Path, fmax: float) -> None:
     # relax() failures inside the orientation loop are already caught in run_one() itself;
     # this is the outer net for everything before that.
     pair_failures: list[tuple[str, str, str]] = []
-    for model in MODELS:
-        for oxide in OXIDES:
+    for model in models:
+        for oxide in oxides:
             try:
                 rows = run_one(model, oxide, outdir, cfg)
             except Exception as e:
@@ -316,8 +337,10 @@ def main(outdir: Path, fmax: float) -> None:
                 rows = [{
                     "model": model, "oxide": oxide, "site_index": None, "symmetry_class": None,
                     "orientation": None, "failed": True, "error": f"pair-level: {e}"[:500],
-                    "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
+                    "e_ads_eV": None, "oco_angle_deg": None,
+                    "adsorbed": None, "desorbing": None,
                     "desorbing_early_stop": None, "desorbing_final_geometry": None,
+                    "trivial_start": None, "start_fmax": None,
                     "end_anchor_distance_A": None, "anchor_bond_length_A": None,
                     "extended": None, "extensions_used": None, "converged": None, "nsteps": None,
                 }]
@@ -335,6 +358,10 @@ def main(outdir: Path, fmax: float) -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("outdir", type=Path)
-    ap.add_argument("--fmax", type=float, default=0.05)
+    ap.add_argument("--fmax", type=float, default=0.02)
+    ap.add_argument("--oxides", nargs="+", choices=ALL_OXIDES, default=list(ALL_OXIDES),
+                     help=f"which oxide(s) to run (default: all {len(ALL_OXIDES)})")
+    ap.add_argument("--models", nargs="+", choices=MODELS, default=MODELS,
+                     help="which model(s) to run (default: both)")
     a = ap.parse_args()
-    main(a.outdir, a.fmax)
+    main(a.outdir, a.fmax, a.oxides, a.models)
