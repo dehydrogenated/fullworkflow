@@ -93,7 +93,7 @@ OUT="$SLURM_SUBMIT_DIR/runs/co2_ads_benchmark"
 # logic picks them up for free and only the (standoff/orientation-affected) adsorbate stage
 # actually reruns. Nothing breaks if they aren't there — it just relaxes bulk/slab fresh.
 STATUS=0
-python "$REPO/scripts/co2_adsorption_retest.py" "$OUT" --fmax 0.05 || STATUS=$?
+python "$REPO/scripts/co2_adsorption_retest.py" "$OUT" --fmax 0.02 || STATUS=$?
 
 echo
 echo "results in scratch: $OUT/results_retest.jsonl"
