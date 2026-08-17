@@ -2,7 +2,11 @@
 vertical orientation only. One relaxation per standoff. Ti-O covalent sum ~2.26 A, so
 SEED_STANDOFFS below give total placement distances of ~2.76/3.26/3.76 A.
 
-    python scripts/co2_standoff_sweep/run.py runs/co2_standoff_sweep
+fmax tightened to 0.005 and extension enabled (up to MAX_EXTENSIONS rounds of
+EXTEND_STEPS each) -- first pass at 0.02/no-extension left 2/3 unconverged at the 300-step
+cap; this gives those trajectories much more room to actually reach the surface or not.
+
+    python scripts/co2_standoff_sweep/run.py runs/co2_standoff_sweep_tight
 """
 
 from __future__ import annotations
@@ -25,6 +29,11 @@ MODEL = "UMA-oc22"
 MP_ID = "mp-2657"
 SEED_STANDOFFS = [0.5, 1.0, 1.5]
 DESORB_TOL = 2.0
+FMAX = 0.005
+DESORB_CHECK_STEP = 100
+DESORB_TREND_WINDOW = 20
+EXTEND_STEPS = 100
+MAX_EXTENSIONS = 5
 
 
 def undercoordinated_metal_site(candidates):
@@ -46,6 +55,7 @@ def undercoordinated_metal_site(candidates):
 def main(outdir: Path) -> None:
     backend = get_backend(MODEL)
     cfg = RunConfig()
+    cfg = replace(cfg, relax=replace(cfg.relax, fmax=FMAX))
     co2_species, co2_coords = ADSORBATE_FRAGMENTS["CO2"]
     n_ads = len(co2_species)
 
@@ -83,6 +93,9 @@ def main(outdir: Path) -> None:
         res = relax(
             cand.structure, backend, workdir=site_dir,
             fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
+            desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
+            desorb_trend_window=DESORB_TREND_WINDOW,
+            extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
         )
         e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
         angle = res.structure.get_angle(anchor_idx, anchor_idx + 1, anchor_idx + n_ads - 1)
@@ -90,15 +103,19 @@ def main(outdir: Path) -> None:
         desorbed = (
             end_dist is not None and bond_len is not None and end_dist >= DESORB_TOL * bond_len
         )
+        extended = bool(res.meta.get("extended"))
+        extensions_used = res.meta.get("extensions_used", 0)
 
         row = {
             "standoff": standoff, "site": cand.site_id["site_label"],
             "e_ads_eV": e_ads, "oco_angle_deg": angle, "desorbed": desorbed,
             "end_anchor_distance_A": end_dist, "converged": res.converged, "nsteps": res.nsteps,
+            "extended": extended, "extensions_used": extensions_used,
         }
         results.append(row)
         print(f"standoff={standoff:<4} E_ads={e_ads:+.4f} eV  angle={angle:6.1f}  "
-              f"desorbed={desorbed}  nsteps={res.nsteps}", flush=True)
+              f"desorbed={desorbed}  converged={res.converged}  nsteps={res.nsteps}  "
+              f"extensions={extensions_used}", flush=True)
 
     (outdir / "results.jsonl").write_text("\n".join(json.dumps(r) for r in results) + "\n")
     print(f"\nwrote {outdir / 'results.jsonl'}")
