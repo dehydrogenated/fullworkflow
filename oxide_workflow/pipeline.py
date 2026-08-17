@@ -396,6 +396,10 @@ def _relax_record(
     desorb_check_step = (
         cfg.adsorbate.desorb_early_stop_step if stage == "adsorbate" else None
     )
+    extend_if_approaching = (
+        cfg.adsorbate.extend_if_approaching if stage == "adsorbate" else False
+    )
+    n_ads = len(cfg.adsorbate.species) if (desorb_check_step or extend_if_approaching) else None
     res = relax(
         structure,
         backend,
@@ -403,8 +407,10 @@ def _relax_record(
         fmax=cfg.relax.fmax,
         max_steps=cfg.relax.max_steps,
         optimizer=cfg.relax.optimizer,
-        desorb_check_n_ads=len(cfg.adsorbate.species) if desorb_check_step else None,
+        desorb_check_n_ads=n_ads,
         desorb_check_step=desorb_check_step,
+        extend_if_approaching=extend_if_approaching,
+        extend_steps=cfg.adsorbate.extend_steps,
     )
     # Post-relaxation sanity flags. The adsorbate displacement is the direct evidence of a
     # non-interacting placement (adsorbate frozen at its start); start_fmax is meaningful
@@ -440,6 +446,11 @@ def _relax_record(
             f"adsorbate desorbing: stopped early at step {desorb_check_step} to save "
             "compute (net motion away from the surface since the start — not a converged "
             "adsorption energy)"
+        )
+    if res.meta.get("extended"):
+        flags.append(
+            f"relaxation extended by {cfg.adsorbate.extend_steps} steps past "
+            f"{cfg.relax.max_steps}: still net-approaching the surface, not just oscillating"
         )
     e_ads, e_vac = _derived(res.energy)
     header = _relax_header(

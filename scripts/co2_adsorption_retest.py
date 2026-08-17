@@ -18,10 +18,25 @@ This retest fixes both:
      closed-form: phi_i = i * (360/N) degrees -- no golden-angle/spiral needed, that solves
      the harder problem of spreading points over a *sphere's surface*, not a single ring.
 
-Also turns on the new early-stop desorption check (desorb_early_stop_step in
-AdsorbateConfig): a trajectory that has net-drifted away from the surface by step 100 is
-flagged and abandoned instead of burning the rest of a 300-step budget on a site that was
-never going to bind.
+Sites: the original 3 ontop candidates (undercoordinated metal, O2c, 6-fold metal) had a
+10/10 record across the first sweep -- the undercoordinated metal bound every time, the
+other two desorbed every time. undercoordinated_metal_sites() below spends the orientation
+budget on that one proven site instead: ontop PLUS the nearest bridge and hollow sites
+anchored at the same undercoordinated-metal atom (stages.py labels bridge/hollow candidates
+by nearest exposed neighbor, so this is a direct site_label match, not a new distance
+calculation). 3 sites total, same as before -- broader than one placement, without paying
+for a blind bridge/hollow search over the whole surface.
+
+Also turns on two symmetric relaxation-length checks (both in AdsorbateConfig):
+
+  - desorb_early_stop_step: a trajectory that has net-drifted away from the surface by
+    step 100 is flagged and abandoned instead of burning the rest of the step budget on a
+    site that was never going to bind.
+  - extend_if_approaching: the reverse case -- literature starts CO2 5 A from the surface
+    and lets a full optimization bring it in, farther than SEED_STANDOFF affords here for a
+    fixed step budget, so a trajectory that's still net-closing the gap (not oscillating)
+    when max_steps runs out gets one extension of EXTEND_STEPS more rather than being
+    called unconverged on a trajectory that hadn't actually finished.
 
 Bulk and slab relaxations are resumed for free from an existing run at the same --outdir
 (pipeline._relax_record's own resume-from-disk logic) -- only the adsorbate stage repeats,
@@ -39,6 +54,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -67,6 +83,7 @@ for _o in OXIDES.values():
 POLAR_TILT_DEG = 25.0
 N_AZIMUTH = 5
 DESORB_CHECK_STEP = 100
+EXTEND_STEPS = 100  # one extension of this many steps if still net-approaching at max_steps
 SEED_STANDOFF = 1.2  # Å beyond covalent-radii sum; default AdsorbateConfig is 0.2
 
 
@@ -99,6 +116,44 @@ def azimuthal_orientations(structure, anchor_idx: int, n_ads: int):
     return variants
 
 
+def _coordination_of(label: str) -> int | None:
+    m = re.match(r"^[A-Za-z]+(\d+)c$", label or "")
+    return int(m.group(1)) if m else None
+
+
+def undercoordinated_metal_sites(candidates):
+    """3 candidates (ontop/bridge/hollow), all anchored at the single most undercoordinated
+    metal atom -- stages.py labels bridge/hollow sites by their nearest exposed neighbor, so
+    "site_label == the metal's label" is exactly "this bridge/hollow sits next to that atom".
+
+    That undercoordinated-metal ontop site won 10/10 of the original sweep's (model, oxide)
+    pairs outright; the other two ontop candidates (O2c, the 6-fold metal) desorbed in all
+    10. This concentrates the orientation sweep on the site with an actual binding track
+    record instead of diluting it across a blind bridge/hollow search over the whole surface.
+    """
+    by_type: dict[str, list] = {"ontop": [], "bridge": [], "hollow": []}
+    for c in candidates:
+        by_type.setdefault(c.site_id["symmetry_class"], []).append(c)
+
+    metal_ontop = [
+        c for c in by_type["ontop"]
+        if c.site_id["site_label"] and not c.site_id["site_label"].startswith("O")
+    ]
+    if not metal_ontop:
+        raise RuntimeError("no metal ontop site found among candidates")
+    target = min(metal_ontop, key=lambda c: _coordination_of(c.site_id["site_label"]) or 99)
+    label = target.site_id["site_label"]
+
+    picked = [target]
+    for ptype in ("bridge", "hollow"):
+        match = next((c for c in by_type[ptype] if c.site_id["site_label"] == label), None)
+        if match is not None:
+            picked.append(match)
+        else:
+            print(f"    no {ptype} site anchored at {label} found among candidates -- skipping")
+    return picked, label
+
+
 def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
     backend = get_backend(model)
     mp_id = OXIDES[oxide]["mp_id"]
@@ -129,11 +184,13 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
         backend, cfg, pipeline.relax, species=co2_species, coords=co2_coords,
     )
 
-    candidates = adsorbate_candidates(
+    all_candidates = adsorbate_candidates(
         pristine_structure, cfg.adsorbate, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
     )
-    print(f"    {len(candidates)} ontop site(s) x {1 + N_AZIMUTH} orientation(s) "
-          f"= {len(candidates) * (1 + N_AZIMUTH)} relaxations", flush=True)
+    candidates, metal_label = undercoordinated_metal_sites(all_candidates)
+    print(f"    {len(candidates)} site(s) (ontop/bridge/hollow near {metal_label}) x "
+          f"{1 + N_AZIMUTH} orientation(s) = {len(candidates) * (1 + N_AZIMUTH)} relaxations",
+          flush=True)
 
     rows = []
     for cand in candidates:
@@ -143,19 +200,22 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                 oriented, backend,
                 fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
                 desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
+                extend_if_approaching=True, extend_steps=EXTEND_STEPS,
             )
             e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
             angle = res.structure.get_angle(anchor_idx, anchor_idx + 1, anchor_idx + n_ads - 1)
             desorbing = bool(res.meta.get("early_stopped_desorbing"))
+            extended = bool(res.meta.get("extended"))
             row = {
                 "model": model, "oxide": oxide, "site_index": cand.site_id["site_index"],
                 "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                 "e_ads_eV": e_ads, "oco_angle_deg": angle, "desorbing": desorbing,
-                "converged": res.converged, "nsteps": res.nsteps,
+                "extended": extended, "converged": res.converged, "nsteps": res.nsteps,
             }
             rows.append(row)
+            status = "DESORBING" if desorbing else ("EXTENDED" if extended else "OK")
             print(f"    site{row['site_index']} {label:14s} E_ads={e_ads:+.4f} eV  "
-                  f"angle={angle:6.1f}  {'DESORBING' if desorbing else 'OK':10s}"
+                  f"angle={angle:6.1f}  {status:10s}"
                   f"nsteps={res.nsteps}", flush=True)
     return rows
 
@@ -165,8 +225,12 @@ def main(outdir: Path, fmax: float) -> None:
     cfg = RunConfig()
     cfg = replace(cfg, adsorbate=replace(
         cfg.adsorbate, species=co2_species, coords=co2_coords,
-        positions=("ontop",), max_per_position=3,
+        # Enumerate all three position types uncapped; undercoordinated_metal_sites() then
+        # keeps only the ontop/bridge/hollow trio anchored at the undercoordinated metal,
+        # so nothing here is spent relaxing sites with no binding track record.
+        positions=("ontop", "bridge", "hollow"), max_per_position=None,
         seed_standoff=SEED_STANDOFF, desorb_early_stop_step=DESORB_CHECK_STEP,
+        extend_if_approaching=True, extend_steps=EXTEND_STEPS,
     ))
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=fmax))
     outdir.mkdir(parents=True, exist_ok=True)

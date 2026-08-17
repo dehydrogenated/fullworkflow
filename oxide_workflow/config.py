@@ -49,6 +49,12 @@ class AdsorbateConfig:
     # desorbing instead of burning the rest of max_steps on a trajectory that was never
     # going to bind. None = disabled (default; existing runs are unaffected).
     desorb_early_stop_step: int | None = None
+    # The reverse case: if max_steps runs out unconverged but the adsorbate is still
+    # net-approaching the surface (genuinely still doing work, not just oscillating), give
+    # it one extension of extend_steps more instead of calling it unconverged on a
+    # trajectory that hadn't finished. False = disabled (default).
+    extend_if_approaching: bool = False
+    extend_steps: int = 100
 
 # Named fragments for --adsorbate. First entry is the binding atom and must sit at z=0:
 # pymatgen anchors the lowest-z atom on the site, so ordering sets which end faces the surface.

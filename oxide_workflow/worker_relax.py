@@ -117,16 +117,38 @@ def main(jobfile: str) -> None:
     early_stopped_desorbing = False
     d_start = min_adsorbate_surface_distance(atoms, n_ads) if n_ads and check_step else None
 
+    # The reverse case: max_steps runs out unconverged, but the adsorbate is still
+    # net-approaching the surface (real work still happening, not oscillation) -- checked
+    # by comparing distance at (max_steps - extend_steps) against distance at max_steps.
+    extend_if_approaching = bool(spec.get("extend_if_approaching", False))
+    extend_steps = int(spec.get("extend_steps", 100))
+    extend_window_step = max(max_steps - extend_steps, 0) if extend_if_approaching and n_ads else None
+    d_before_extend_window = None
+    extended = False
+
     opt = optimizer(target, logfile=str(workdir / "opt.log"))
     opt.attach(lambda: write(traj, atoms, format="extxyz", append=True), interval=1)
     t0 = time.time()
-    if n_ads and check_step:
+    if n_ads and (check_step or extend_if_approaching):
         for _converged in opt.irun(fmax=fmax, steps=max_steps):
-            if opt.nsteps == check_step:
+            if check_step and opt.nsteps == check_step:
                 d_now = min_adsorbate_surface_distance(atoms, n_ads)
                 if d_now > d_start:
                     early_stopped_desorbing = True
                     break
+            if extend_window_step is not None and opt.nsteps == extend_window_step:
+                d_before_extend_window = min_adsorbate_surface_distance(atoms, n_ads)
+
+        if (
+            not early_stopped_desorbing
+            and d_before_extend_window is not None
+            and max_force(atoms) > fmax
+        ):
+            d_now = min_adsorbate_surface_distance(atoms, n_ads)
+            if d_now < d_before_extend_window:  # still net-closing the gap -- give it more
+                extended = True
+                for _converged in opt.irun(fmax=fmax, steps=extend_steps):
+                    pass
     else:
         opt.run(fmax=fmax, steps=max_steps)
     elapsed = time.time() - t0
@@ -147,6 +169,7 @@ def main(jobfile: str) -> None:
         "trajectory": traj.name,
         "n_frames": n_frames,
         "early_stopped_desorbing": early_stopped_desorbing,
+        "extended": extended,
     }
     write(workdir / spec["output_poscar"], atoms, format="vasp")
     (workdir / spec["result_json"]).write_text(json.dumps(result, indent=2))
