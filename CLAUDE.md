@@ -108,3 +108,53 @@ Add a `Backend` entry to `REGISTRY` in `backends.py`. The model checkpoint must 
 ### Adsorbate placement
 
 Adsorbates are placed at approximately the covalent bond length above the surface (set by `seed_standoff=0` in `AdsorbateConfig`, meaning exactly at the covalent sum). When modifying placement distance, always verify the float-off distance remains physically reasonable and check `placement_quality_flags` output.
+
+## Running on Sockeye (SLURM)
+
+Key paths:
+- `PROJECT=/arc/project/st-akkiraju-1/ssong18` — durable storage; this repo lives at `$PROJECT/fullworkflow`
+- `/scratch/st-akkiraju-1/$USER` — fast, purged-on-a-timer scratch; **all job output must land here**, never `/arc/project`
+- `$PROJECT/miniforge3` — conda base (`OXW_CONDA_BASE`); envs include `oxw` (orchestrator, has `oxide_workflow`+pymatgen installed editable) plus one per model (`mace-clean`, `fairchem`, ...)
+- `$PROJECT/models` — checkpoints (`OXW_MODEL_DIR`): `mace-mh-1.model`, `uma-s-1p2.pt`
+
+Watch out: the home-ish project dir and the scratch dir both end in `ssong18` as their last path component — easy to be in the wrong one without noticing. Run `pwd` before trusting a relative `cd`; prefer absolute paths.
+
+### Submitting a job
+
+**Must submit from `/scratch`, never from `/arc/project`** — SLURM rejects it outright ("Submitting jobs from directories residing in /arc/project is not allowed"). The job *script* itself can still live in the repo under `/arc/project`; only the *working directory at submission time* matters:
+
+```bash
+cd /scratch/st-akkiraju-1/$USER
+sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/<job>.slurm
+```
+
+CPU is the `#SBATCH` default in every job script (`--account=st-akkiraju-1`, `--partition=cascade`). GPU needs a **different account** (the `-gpu` suffix) and explicit flags at submission time — command-line flags beat a script's `#SBATCH` defaults, so no editing is needed to switch:
+
+```bash
+sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=6:00:00 \
+       /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/<job>.slurm
+```
+
+### Monitoring / canceling
+
+```bash
+squeue -u $USER                                          # running, pending, or gone?
+tail -f /scratch/st-akkiraju-1/$USER/slurm-<jobid>.out    # live log (or slurm-<jobid>.err)
+scancel <jobid>                                           # cancel one job
+scancel -u $USER                                          # cancel everything you have running
+```
+
+### Why the job scripts look the way they do
+
+Every job script (`sockeye_job.sh`, `sockeye_oc22.sh`, `sockeye_co2_retest.slurm`) carries the same environment contract, since compute nodes are far more restricted than the login node:
+
+- **No outbound network** — `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` stop anything that would try to reach out at runtime from hanging until the walltime runs out instead of failing fast. Checkpoints and pip installs have to be pre-staged from a login node beforehand.
+- **`$HOME` and `/arc/project` are read-only on compute nodes** — only `/scratch` is writable. Any library that caches under `$HOME` by default (triton, torch inductor, huggingface, matplotlib via pymatgen, fairchem separately since it ignores `XDG_CACHE_HOME`) has to be redirected there or it crashes mid-run — see any job script's cache-redirection block for the exact env vars.
+- **Device detection from the scheduler, not a hardcoded flag** — `OXW_DEVICE` is set by checking whether `CUDA_VISIBLE_DEVICES` is actually populated, so a forgotten `--gres=gpu` fails loudly (wrong device) instead of silently paying for a GPU node and running on its CPUs.
+- **Results land in scratch, not `/arc/project`** — scratch is purged on a timer, so every job script prints an `rsync` command at the end to copy results into `$PROJECT/runs/` for durable storage. That copy can only be run from the **login node**; `/arc/project` is read-only from inside a compute-node job.
+
+### Common mistakes (all hit in practice)
+
+- `.py` files aren't directly executable here — prefix with `python3`.
+- `<placeholder>`-style text in an example command is not literal — substitute the real value (job ID, path, etc.) before running it.
+- A results file opened in append mode (most of this repo's analysis scripts) will silently blend a new run's rows into an old run's leftover file at the same path — move or rename the old one first if the settings changed between runs.
