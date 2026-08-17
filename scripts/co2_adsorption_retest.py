@@ -71,10 +71,12 @@ from oxide_workflow import pipeline
 from oxide_workflow.backends import get_backend, relax
 from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig
 from oxide_workflow.energetics import adsorption_energy, gas_reference_energy
+from oxide_workflow.pipeline import _adsorbate_anchor_distance
 from oxide_workflow.stages import adsorbate_candidates, make_slab
 from oxide_workflow.structures import get_structure
 
 MODELS = ["UMA-omat", "MACE-mh1-omat"]
+DESORB_TOL = 2.0  # matches checks.py's placement_quality_flags default
 
 KCAL_TO_EV = 0.0433641
 OXIDES = {
@@ -236,6 +238,8 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                     "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                     "failed": True, "error": str(e)[:500],
                     "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
+                    "desorbing_early_stop": None, "desorbing_final_geometry": None,
+                    "end_anchor_distance_A": None, "anchor_bond_length_A": None,
                     "extended": None, "extensions_used": None, "converged": None, "nsteps": None,
                 }
                 rows.append(row)
@@ -244,20 +248,37 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                 continue
             e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
             angle = res.structure.get_angle(anchor_idx, anchor_idx + 1, anchor_idx + n_ads - 1)
-            desorbing = bool(res.meta.get("early_stopped_desorbing"))
+            early_stopped = bool(res.meta.get("early_stopped_desorbing"))
+            # The in-loop check above only fires at ONE specific step -- a slow drift that
+            # crosses "farther than start" only afterward, or that settles into a low-force
+            # but still-far final position, would otherwise sail through as "converged"
+            # unflagged. This is the same final-geometry check pipeline.py uses everywhere
+            # else (_adsorbate_anchor_distance + checks.py's desorb_tol convention), applied
+            # here explicitly since this script bypasses pipeline._relax_record.
+            end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
+            desorbed_final = (
+                end_dist is not None and bond_len is not None
+                and end_dist >= DESORB_TOL * bond_len
+            )
+            desorbing = early_stopped or desorbed_final
             extended = bool(res.meta.get("extended"))
             row = {
                 "model": model, "oxide": oxide, "site_index": cand.site_id["site_index"],
                 "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                 "failed": False, "error": None,
                 "e_ads_eV": e_ads, "oco_angle_deg": angle, "desorbing": desorbing,
+                "desorbing_early_stop": early_stopped, "desorbing_final_geometry": desorbed_final,
+                "end_anchor_distance_A": end_dist, "anchor_bond_length_A": bond_len,
                 "extended": extended, "extensions_used": res.meta.get("extensions_used", 0),
                 "converged": res.converged, "nsteps": res.nsteps,
             }
             rows.append(row)
-            status = "DESORBING" if desorbing else ("EXTENDED" if extended else "OK")
+            if desorbing:
+                status = "DESORBING(early)" if early_stopped else "DESORBING(final)"
+            else:
+                status = "EXTENDED" if extended else "OK"
             print(f"    site{row['site_index']} {label:14s} E_ads={e_ads:+.4f} eV  "
-                  f"angle={angle:6.1f}  {status:10s}"
+                  f"angle={angle:6.1f}  {status:16s}"
                   f"nsteps={res.nsteps}", flush=True)
     return rows
 
@@ -296,6 +317,8 @@ def main(outdir: Path, fmax: float) -> None:
                     "model": model, "oxide": oxide, "site_index": None, "symmetry_class": None,
                     "orientation": None, "failed": True, "error": f"pair-level: {e}"[:500],
                     "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
+                    "desorbing_early_stop": None, "desorbing_final_geometry": None,
+                    "end_anchor_distance_A": None, "anchor_bond_length_A": None,
                     "extended": None, "extensions_used": None, "converged": None, "nsteps": None,
                 }]
             with results_path.open("a") as f:
