@@ -122,14 +122,17 @@ def _coordination_of(label: str) -> int | None:
 
 
 def undercoordinated_metal_sites(candidates):
-    """3 candidates (ontop/bridge/hollow), all anchored at the single most undercoordinated
-    metal atom -- stages.py labels bridge/hollow sites by their nearest exposed neighbor, so
-    "site_label == the metal's label" is exactly "this bridge/hollow sits next to that atom".
+    """4 candidates: ontop/bridge/hollow anchored at the single most undercoordinated metal
+    atom, PLUS the ontop bridging-oxygen (O2c) site -- stages.py labels bridge/hollow sites
+    by their nearest exposed neighbor, so "site_label == the metal's label" is exactly "this
+    bridge/hollow sits next to that atom".
 
-    That undercoordinated-metal ontop site won 10/10 of the original sweep's (model, oxide)
-    pairs outright; the other two ontop candidates (O2c, the 6-fold metal) desorbed in all
-    10. This concentrates the orientation sweep on the site with an actual binding track
-    record instead of diluting it across a blind bridge/hollow search over the whole surface.
+    The undercoordinated-metal ontop site won 10/10 of the original sweep's (model, oxide)
+    pairs outright; O2c and the 6-fold metal both desorbed in all 10 -- but that was under
+    the too-close, symmetric-start placement this retest exists to fix, so O2c (the literal
+    "Os" of the paper's secondary C-Os bending interaction) still gets a fair fresh attempt
+    here rather than being assumed dead. O3c (in-plane oxygen, never in the paper's
+    mechanism and never tested even in the original sweep) is deliberately left out.
     """
     by_type: dict[str, list] = {"ontop": [], "bridge": [], "hollow": []}
     for c in candidates:
@@ -151,6 +154,12 @@ def undercoordinated_metal_sites(candidates):
             picked.append(match)
         else:
             print(f"    no {ptype} site anchored at {label} found among candidates -- skipping")
+
+    o2c = next((c for c in by_type["ontop"] if c.site_id["site_label"] == "O2c"), None)
+    if o2c is not None:
+        picked.append(o2c)
+    else:
+        print("    no ontop O2c site found among candidates -- skipping")
     return picked, label
 
 
