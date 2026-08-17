@@ -44,6 +44,11 @@ class AdsorbateConfig:
     min_clearance: float = 0.8  # reject a placement closer than this x the covalent bond length to any slab atom — the guard against spawning inside a surface atom
     symm_reduce: float = 0.01  # pymatgen: how close (fractional coords) before two sites merge
     max_per_position: int | None = None  # cap sites kept per position type (None = all); for smoke tests
+    # If set, check at this step whether the adsorbate has net-drifted farther from the
+    # surface than where it started; if so, stop the relaxation early and flag it as
+    # desorbing instead of burning the rest of max_steps on a trajectory that was never
+    # going to bind. None = disabled (default; existing runs are unaffected).
+    desorb_early_stop_step: int | None = None
 
 # Named fragments for --adsorbate. First entry is the binding atom and must sit at z=0:
 # pymatgen anchors the lowest-z atom on the site, so ordering sets which end faces the surface.
@@ -54,6 +59,11 @@ ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, 
     "O2": (("O", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.208))),  # end-on, gas-phase O-O = 1.208 A
     "O2-side": (("O", "O"), ((0.0, -0.604, 0.0), (0.0, 0.604, 0.0))), # Side-on: both atoms at z=0
     "O": (("O",), ((0.0, 0.0, 0.0),)),
+    "H2": (("H", "H"), ((0.0, 0.0, 0.0), (0.0, 0.0, 0.741))),  # gas-phase H-H = 0.741 A
+    # linear O=C=O, gas-phase C=O = 1.16 A; first O anchors to the surface metal cation
+    # (Chavez-Rocha et al., Molecules 2023, 28, 1776: CO2 approaches M1-OA first, then may
+    # bend toward a surface oxygen as a second interaction).
+    "CO2": (("O", "C", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.16), (0.0, 0.0, 2.32))),
 }
 
 @dataclass(frozen=True)

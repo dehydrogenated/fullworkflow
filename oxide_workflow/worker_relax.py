@@ -46,12 +46,39 @@ def build_calculator(spec: dict):
             spec["model_path"], device=spec.get("device", "cpu")
         )
         return FAIRChemCalculator(pu, task_name=spec.get("task", "omat"))
+    if loader == "chgnet":
+        from chgnet.model import CHGNet
+        from chgnet.model.dynamics import CHGNetCalculator
+
+        # model_path doubles as the CHGNet release tag (e.g. "0.3.0"); weights ship
+        # inside the package, no local checkpoint file or network needed.
+        model = CHGNet.load(
+            model_name=spec["model_path"], use_device=spec.get("device", "cpu"),
+            verbose=False,
+        )
+        return CHGNetCalculator(model=model, use_device=spec.get("device", "cpu"))
+    if loader == "orb":
+        from orb_models.forcefield import pretrained
+        from orb_models.forcefield.calculator import ORBCalculator
+
+        # model_path doubles as the pretrained-checkpoint function name (e.g.
+        # "orb_v2"); weights download once from Orbital Materials' S3 bucket and
+        # are cached locally by cached_path after that.
+        orbff = getattr(pretrained, spec["model_path"])(device=spec.get("device", "cpu"))
+        return ORBCalculator(orbff, device=spec.get("device", "cpu"))
     raise ValueError(f"unknown loader: {loader!r}")
 
 
 def max_force(atoms) -> float:
     f = atoms.get_forces()
     return float(np.sqrt((f ** 2).sum(axis=1)).max())
+
+
+def min_adsorbate_surface_distance(atoms, n_ads: int) -> float:
+    """Shortest distance between any of the last ``n_ads`` (adsorbate) atoms and any atom
+    before them (the surface). Adsorbate atoms are always appended last (see stages.py)."""
+    d = atoms.get_all_distances(mic=True)
+    return float(d[-n_ads:, :-n_ads].min())
 
 
 def main(jobfile: str) -> None:
@@ -80,10 +107,28 @@ def main(jobfile: str) -> None:
         traj.unlink()
     write(traj, atoms, format="extxyz", append=True)  # frame 0 = initial (calc already primed)
 
+    # Optional early-stop: at desorb_check_step, compare the adsorbate's distance to the
+    # surface against its starting distance. Net outward drift by then means the site was
+    # never going to bind (see checks.py's post-hoc "adsorbate desorbed" flag, which this
+    # complements by catching the same failure mode *during* relaxation instead of after
+    # burning the full step budget on it).
+    n_ads = spec.get("desorb_check_n_ads")
+    check_step = spec.get("desorb_check_step")
+    early_stopped_desorbing = False
+    d_start = min_adsorbate_surface_distance(atoms, n_ads) if n_ads and check_step else None
+
     opt = optimizer(target, logfile=str(workdir / "opt.log"))
     opt.attach(lambda: write(traj, atoms, format="extxyz", append=True), interval=1)
     t0 = time.time()
-    opt.run(fmax=fmax, steps=max_steps)
+    if n_ads and check_step:
+        for _converged in opt.irun(fmax=fmax, steps=max_steps):
+            if opt.nsteps == check_step:
+                d_now = min_adsorbate_surface_distance(atoms, n_ads)
+                if d_now > d_start:
+                    early_stopped_desorbing = True
+                    break
+    else:
+        opt.run(fmax=fmax, steps=max_steps)
     elapsed = time.time() - t0
 
     n_frames = sum(1 for line in traj.read_text().splitlines() if line.strip().isdigit())
@@ -101,6 +146,7 @@ def main(jobfile: str) -> None:
         "relax_cell": bool(spec.get("relax_cell", False)),
         "trajectory": traj.name,
         "n_frames": n_frames,
+        "early_stopped_desorbing": early_stopped_desorbing,
     }
     write(workdir / spec["output_poscar"], atoms, format="vasp")
     (workdir / spec["result_json"]).write_text(json.dumps(result, indent=2))

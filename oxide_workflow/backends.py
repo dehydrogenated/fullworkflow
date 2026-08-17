@@ -73,6 +73,8 @@ def relax(
     optimizer: str,
     workdir: str | Path | None = None,
     relax_cell: bool = False, # True relaxes both lattice and atomic positions, should only be true for bulk relaxation
+    desorb_check_n_ads: int | None = None,  # last N atoms are the mobile adsorbate
+    desorb_check_step: int | None = None,  # step at which to test for net outward drift
 ) -> RelaxResult:
 
     if not backend.can_relax:
@@ -100,6 +102,8 @@ def relax(
         "optimizer": optimizer,
         "relax_cell": relax_cell,
         "trajectory_xyz": "trajectory.xyz",
+        "desorb_check_n_ads": desorb_check_n_ads,
+        "desorb_check_step": desorb_check_step,
     }
     jobfile = work / "job.json"
     jobfile.write_text(json.dumps(spec, indent=2))
@@ -137,18 +141,23 @@ def relax(
             "trajectory": str(traj_path) if traj_path.exists() else None,
             "n_frames": result.get("n_frames"),
             "opt_log": opt_log.read_text() if opt_log.exists() else "",
+            "early_stopped_desorbing": result.get("early_stopped_desorbing", False),
         },
     )
 
 
 # --- Registry: prototype backends (models cached locally) ----------------------------
 #
-# Two multi-output checkpoints, each exposing several heads/tasks. Every head/task is
-# registered as its own Backend (same file, different selector) so any can be picked as
-# reference or candidate and lands in its own tree folder.
+# MACE and UMA are two multi-output checkpoints, each exposing several heads/tasks. Every
+# head/task is registered as its own Backend (same file, different selector) so any can be
+# picked as reference or candidate and lands in its own tree folder. CHGNet and Orb are
+# single-checkpoint models with no head/task selector — model_path doubles as a release
+# tag/function name instead of a literal file path (see _chgnet/_orb docstrings).
 #
-#   MACE  mace-mh-1.model   → heads via mace_mp(head=...)   (env: mace-clean)
-#   UMA   uma-s-1p2.pt      → tasks via task_name=...       (env: fairchem)
+#   MACE    mace-mh-1.model   → heads via mace_mp(head=...)        (env: mace-clean)
+#   UMA     uma-s-1p2.pt      → tasks via task_name=...            (env: fairchem)
+#   CHGNet  bundled in pip package, selected by release tag        (env: chgnet)
+#   Orb     fetched+cached on first use, selected by ckpt function (env: orb)
 #
 # The reference is mace-mh-1's OMat24 (PBE) head — the updated OMat24 that benchmarked
 # more accurately than the standalone cached MACE-OMAT24 it replaces.
@@ -171,6 +180,24 @@ def _uma(name: str, task: str, labels: tuple[str, ...]) -> Backend:
     )
 
 
+def _chgnet(name: str, model_name: str, labels: tuple[str, ...]) -> Backend:
+    # model_path is the CHGNet release tag, not a file path — weights ship inside
+    # the pip package, so there is nothing in MODEL_DIR to point at.
+    return Backend(
+        name=name, env="chgnet", loader="chgnet", model_path=model_name,
+        training_labels=labels,
+    )
+
+
+def _orb(name: str, checkpoint: str, labels: tuple[str, ...]) -> Backend:
+    # model_path is the pretrained-checkpoint function name in orb_models.forcefield.pretrained
+    # (e.g. "orb_v2"), not a file path — weights are fetched once and cached by cached_path.
+    return Backend(
+        name=name, env="orb", loader="orb", model_path=checkpoint,
+        training_labels=labels,
+    )
+
+
 REGISTRY: dict[str, Backend] = {
     # ---- MACE mace-mh-1 heads (mace_test.py: the model's real heads) --------------------
     # Reference: the OMat24 PBE head (bulk-mat, mixed-Hamiltonian) — the updated OMat24.
@@ -188,12 +215,21 @@ REGISTRY: dict[str, Backend] = {
     "UMA-omol": _uma("UMA-omol", "omol", ("OMol", "molec")),
     "UMA-odac": _uma("UMA-odac", "odac", ("ODAC", "MOF")),
     "UMA-omc": _uma("UMA-omc", "omc", ("OMC", "mol-cryst")),
+    # ---- CHGNet (env: chgnet) ------------------------------------------------------------
+    "CHGNet-0.3.0": _chgnet("CHGNet-0.3.0", "0.3.0", ("MPtrj", "PBE/PBE+U")),
+    # ---- Orb (env: orb) -------------------------------------------------------------------
+    "Orb-v2": _orb("Orb-v2", "orb_v2", ("MPtrj+Alexandria", "PBE")),
 }
 
-# Convenience groupings for candidate sweeps (every head/task, minus the reference).
+# Convenience groupings for candidate sweeps (every head/task/checkpoint, minus the reference).
 MACE_HEADS = tuple(n for n in REGISTRY if n.startswith("MACE-mh1-"))
 UMA_TASKS = tuple(n for n in REGISTRY if n.startswith("UMA-"))
-ALL_CANDIDATES = tuple(n for n in (*MACE_HEADS, *UMA_TASKS) if n != "MACE-mh1-omat")
+CHGNET_MODELS = tuple(n for n in REGISTRY if n.startswith("CHGNet-"))
+ORB_MODELS = tuple(n for n in REGISTRY if n.startswith("Orb-"))
+ALL_CANDIDATES = tuple(
+    n for n in (*MACE_HEADS, *UMA_TASKS, *CHGNET_MODELS, *ORB_MODELS)
+    if n != "MACE-mh1-omat"
+)
 
 
 def get_backend(name: str) -> Backend:

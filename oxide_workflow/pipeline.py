@@ -393,6 +393,9 @@ def _relax_record(
             flags=header.get("flags") or [],
         )
 
+    desorb_check_step = (
+        cfg.adsorbate.desorb_early_stop_step if stage == "adsorbate" else None
+    )
     res = relax(
         structure,
         backend,
@@ -400,6 +403,8 @@ def _relax_record(
         fmax=cfg.relax.fmax,
         max_steps=cfg.relax.max_steps,
         optimizer=cfg.relax.optimizer,
+        desorb_check_n_ads=len(cfg.adsorbate.species) if desorb_check_step else None,
+        desorb_check_step=desorb_check_step,
     )
     # Post-relaxation sanity flags. The adsorbate displacement is the direct evidence of a
     # non-interacting placement (adsorbate frozen at its start); start_fmax is meaningful
@@ -430,6 +435,12 @@ def _relax_record(
         end_ads_distance=end_ads_distance,
         ads_bond_length=ads_bond_length,
     )
+    if res.meta.get("early_stopped_desorbing"):
+        flags.append(
+            f"adsorbate desorbing: stopped early at step {desorb_check_step} to save "
+            "compute (net motion away from the surface since the start — not a converged "
+            "adsorption energy)"
+        )
     e_ads, e_vac = _derived(res.energy)
     header = _relax_header(
         res, backend, cfg,

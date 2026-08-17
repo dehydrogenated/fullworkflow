@@ -183,6 +183,46 @@ def oxygen_chemical_potential(
     return float(e_o2 / 2.0)
 
 
+# eV; ZPE-corrected experimental formation enthalpy of H2O from H2 + 1/2 O2 (NIST, via
+# Kowalski, Meyer & Marx, PRB 79, 115410 (2009), Ref. 61). A reaction energy, not an
+# absolute total energy, so it is code/model-independent and safe to mix into any single
+# model's own H2/H2O total energies -- unlike an absolute DFT total energy, which is not.
+WATER_FORMATION_ENTHALPY_EXP = 2.51
+
+
+def oxygen_chemical_potential_corrected(
+    backend, cfg, relax_fn: Callable, cachedir: str | Path = GAS_CACHE_DIR
+) -> float:
+    """mu_O via a thermodynamic cycle through this model's own H2 and H2O, instead of its
+    raw (possibly overbinding) O2 relaxation.
+
+    Mirrors the trick in Kowalski, Meyer & Marx (2009): GGA-class functionals notoriously
+    overbind O2, but describe H2 and H2O well, so solve for E(O2) from the well-behaved
+    pair plus the experimental water formation enthalpy instead of trusting the model's
+    direct O2 total energy. H2 + 1/2 O2 -> H2O is exothermic by WATER_FORMATION_ENTHALPY_EXP
+    (ZPE-corrected experimental Delta_Hf, i.e. E(H2O) - E(H2) - 1/2 E(O2) = -that value), so:
+
+        E(O2)_corrected = 2 * (E(H2O) - E(H2) + WATER_FORMATION_ENTHALPY_EXP)
+
+    E(H2) and E(H2O) come from *this* model, so the whole expression stays on this model's
+    own internal energy scale -- only WATER_FORMATION_ENTHALPY_EXP, a reaction energy, is
+    external. That is what makes this portable per-model, unlike lifting a literature
+    paper's own corrected E(O2) value, which is anchored to that paper's H2/H2O and would
+    not cancel correctly against any of these models' slab energies.
+
+    Does not replace ``oxygen_chemical_potential`` (every existing E_vac in this codebase
+    keeps using the raw O2 term); this is an opt-in second reference for comparing the two.
+    """
+    from .config import ADSORBATE_FRAGMENTS
+
+    h2_species, h2_coords = ADSORBATE_FRAGMENTS["H2"]
+    h2o_species, h2o_coords = ADSORBATE_FRAGMENTS["H2O"]
+    e_h2 = gas_reference_energy(backend, cfg, relax_fn, cachedir, species=h2_species, coords=h2_coords)
+    e_h2o = gas_reference_energy(backend, cfg, relax_fn, cachedir, species=h2o_species, coords=h2o_coords)
+    e_o2_corrected = 2.0 * (e_h2o - e_h2 + WATER_FORMATION_ENTHALPY_EXP)
+    return float(e_o2_corrected / 2.0)
+
+
 def vacancy_formation_energy(
     e_defective: Optional[float], e_pristine: Optional[float], mu_o: Optional[float]
 ) -> Optional[float]:
