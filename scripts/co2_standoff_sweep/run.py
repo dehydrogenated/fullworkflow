@@ -57,7 +57,8 @@ def main(outdir: Path) -> None:
     slab_in = make_slab(bulk, cfg.slab)
     slab_out = pipeline._relax_record(
         slab_in, backend, stage="slab", protocol="reference",
-        geometry_source="cut_from_relaxed_bulk", cfg=cfg, outdir=outdir, canonical=True,
+        geometry_source="cut_from_relaxed_bulk", cfg=cfg, outdir=outdir,
+        relax_cell=False, canonical=True,
     )
     pristine_energy = slab_out.energy
     pristine_structure = slab_out.structure
