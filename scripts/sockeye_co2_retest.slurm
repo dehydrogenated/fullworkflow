@@ -5,7 +5,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=12:00:00
+#SBATCH --time=2:00:00
 #SBATCH --job-name=co2-retest
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
@@ -93,7 +93,7 @@ OUT="$SLURM_SUBMIT_DIR/runs/co2_ads_benchmark"
 # logic picks them up for free and only the (standoff/orientation-affected) adsorbate stage
 # actually reruns. Nothing breaks if they aren't there — it just relaxes bulk/slab fresh.
 STATUS=0
-python "$REPO/scripts/co2_adsorption_retest.py" "$OUT" --fmax 0.02 || STATUS=$?
+python "$REPO/scripts/co2_adsorption_retest.py" "$OUT" --fmax 0.02 --oxides TiO2 || STATUS=$?
 
 echo
 echo "results in scratch: $OUT/results_retest.jsonl"
