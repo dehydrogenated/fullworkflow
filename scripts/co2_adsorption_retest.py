@@ -1,42 +1,49 @@
 """CO2 adsorption retest: does bending appear once placement stops biasing it away?
 
-The first pass (co2_adsorption_benchmark.py) placed CO2 perfectly vertically (a symmetric
-starting orientation that can sit exactly on a linear ridge and never discover a bent
-minimum) and with a standoff close enough to the surface that the winning site every
-single time was flagged "placed on binding site... no room to relax into the well" by
-checks.py -- i.e. most reported energies were near an initial guess, not a genuinely
-explored minimum. Two of the three ontop sites per oxide also desorbed outright.
+v1 (co2_adsorption_benchmark.py) placed CO2 perfectly vertically with a standoff so close
+that every winning site was flagged "no room to relax into the well" -- near an initial
+guess, not a genuinely explored minimum.
 
-This retest fixes both:
+v2 (this file, first version) fixed the symmetry (N_AZIMUTH azimuthal tilts, see
+azimuthal_orientations) and widened the standoff to 1.2 A past the covalent sum. Result:
+228/228 valid attempts, zero failures, zero bending anywhere -- but convergence was
+suspiciously fast (8-36 steps), suggesting CO2 was still falling straight into a shallow
+nearby minimum rather than genuinely exploring. 1.2 A was still a guess, not literature's
+number.
 
-  1. Larger seed_standoff (SEED_STANDOFF below) so there is real room to relax into
-     whatever well exists, instead of starting on top of it.
-  2. For every candidate site, try the vertical baseline PLUS N_AZIMUTH evenly-spaced
-     azimuthal tilts at a fixed polar angle (POLAR_TILT_DEG) -- a rigid rotation of the
-     whole linear CO2 unit about its anchor atom, so bond lengths/linearity are preserved
-     at t=0 and only the approach direction changes. Evenly spacing N points on a circle is
-     closed-form: phi_i = i * (360/N) degrees -- no golden-angle/spiral needed, that solves
-     the harder problem of spreading points over a *sphere's surface*, not a single ring.
+v3 (current): SEED_STANDOFF pushed to ~5 A total (literature's actual number -- see the
+constant's comment), which needs three more things to be safe and correctly interpreted:
+
+  1. Repeatable extension (max_extensions in AdsorbateConfig/worker_relax.py): one 100-step
+     top-up isn't necessarily enough to finish a genuinely long approach, so this repeats up
+     to MAX_EXTENSIONS times, each round requiring continued progress.
+  2. Anchor-specific desorb/extend checks (anchor_surface_distance in worker_relax.py,
+     replacing the old whole-fragment-minimum distance): critical fix -- the old check would
+     have flagged a legitimate reorientation (the far O swinging toward a different surface
+     atom while the anchor stays bonded) as desorption, killing exactly the trajectories
+     this retest exists to let happen. A genuine float-off moves the anchor; a reorientation
+     doesn't.
+  3. Trajectory persistence (explicit workdir per relaxation, organized under
+     outdir/<oxide>/<model>/adsorbate/site<N>_<type>/<orientation>/): v2 called relax()
+     without a workdir, so every structure/trajectory went to an ephemeral tempdir and was
+     lost. This time every attempt's POSCAR/CONTCAR/trajectory.xyz/OUTCAR survives on disk.
 
 Sites: the original 3 ontop candidates (undercoordinated metal, O2c, 6-fold metal) had a
-10/10 record across the first sweep -- the undercoordinated metal bound every time, the
-other two desorbed every time. undercoordinated_metal_sites() below spends the orientation
-budget on that one proven site instead: ontop PLUS the nearest bridge and hollow sites
+10/10 record across the v1 sweep -- the undercoordinated metal bound every time, the other
+two desorbed every time. undercoordinated_metal_sites() below spends the orientation budget
+on that record instead of a blind search: ontop PLUS the nearest bridge and hollow sites
 anchored at the same undercoordinated-metal atom (stages.py labels bridge/hollow candidates
 by nearest exposed neighbor, so this is a direct site_label match, not a new distance
-calculation). 3 sites total, same as before -- broader than one placement, without paying
-for a blind bridge/hollow search over the whole surface.
+calculation), PLUS the ontop bridging-oxygen (O2c) site kept explicitly since it's the
+literal "Os" of the paper's secondary C-Os bending interaction and deserves a fair attempt
+under the corrected placement rather than being assumed dead on the v1/v2 result. O3c
+(in-plane oxygen, never in the paper's mechanism, never tested even in v1) stays excluded.
+4 sites total.
 
-Also turns on two symmetric relaxation-length checks (both in AdsorbateConfig):
-
-  - desorb_early_stop_step: a trajectory that has net-drifted away from the surface by
-    step 100 is flagged and abandoned instead of burning the rest of the step budget on a
-    site that was never going to bind.
-  - extend_if_approaching: the reverse case -- literature starts CO2 5 A from the surface
-    and lets a full optimization bring it in, farther than SEED_STANDOFF affords here for a
-    fixed step budget, so a trajectory that's still net-closing the gap (not oscillating)
-    when max_steps runs out gets one extension of EXTEND_STEPS more rather than being
-    called unconverged on a trajectory that hadn't actually finished.
+Every relaxation is wrapped in its own try/except (both per-orientation and, one level up,
+per (model, oxide) pair) so a single worker crash on an unattended overnight run costs that
+one attempt, not the rest of the sweep -- see results_retest.jsonl's failed/error fields and
+scripts/co2_retest_report.py.
 
 Bulk and slab relaxations are resumed for free from an existing run at the same --outdir
 (pipeline._relax_record's own resume-from-disk logic) -- only the adsorbate stage repeats,
@@ -82,9 +89,14 @@ for _o in OXIDES.values():
 
 POLAR_TILT_DEG = 25.0
 N_AZIMUTH = 5
-DESORB_CHECK_STEP = 100
-EXTEND_STEPS = 100  # one extension of this many steps if still net-approaching at max_steps
-SEED_STANDOFF = 1.2  # Å beyond covalent-radii sum; default AdsorbateConfig is 0.2
+# Fast convergence (8-36 steps) at the previous 1.2 A standoff meant CO2 was falling
+# straight into a shallow, nearby minimum rather than genuinely exploring -- pushed out to
+# match literature's actual 5 A starting distance instead of guessing at an intermediate
+# value again (Ti-O covalent sum ~2.26 A + 2.8 A standoff =~ 5 A total).
+SEED_STANDOFF = 2.8
+DESORB_CHECK_STEP = 150  # more runway before concluding desorption from a farther start
+EXTEND_STEPS = 100
+MAX_EXTENSIONS = 3  # repeatable: up to 300 + 3*100 = 600 steps for a genuinely long approach
 
 
 def azimuthal_orientations(structure, anchor_idx: int, n_ads: int):
@@ -205,12 +217,18 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
     for cand in candidates:
         anchor_idx = len(cand.structure) - n_ads
         for label, oriented in azimuthal_orientations(cand.structure, anchor_idx, n_ads):
+            site_dir = (
+                odir / model / "adsorbate"
+                / f"site{cand.site_id['site_index']}_{cand.site_id['symmetry_class']}"
+                / label
+            )
             try:
                 res = relax(
-                    oriented, backend,
+                    oriented, backend, workdir=site_dir,
                     fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
                     desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
                     extend_if_approaching=True, extend_steps=EXTEND_STEPS,
+                    max_extensions=MAX_EXTENSIONS,
                 )
             except Exception as e:
                 row = {
@@ -218,7 +236,7 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                     "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                     "failed": True, "error": str(e)[:500],
                     "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
-                    "extended": None, "converged": None, "nsteps": None,
+                    "extended": None, "extensions_used": None, "converged": None, "nsteps": None,
                 }
                 rows.append(row)
                 print(f"    site{row['site_index']} {label:14s} RELAX FAILED: "
@@ -233,7 +251,8 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
                 "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
                 "failed": False, "error": None,
                 "e_ads_eV": e_ads, "oco_angle_deg": angle, "desorbing": desorbing,
-                "extended": extended, "converged": res.converged, "nsteps": res.nsteps,
+                "extended": extended, "extensions_used": res.meta.get("extensions_used", 0),
+                "converged": res.converged, "nsteps": res.nsteps,
             }
             rows.append(row)
             status = "DESORBING" if desorbing else ("EXTENDED" if extended else "OK")
@@ -253,7 +272,7 @@ def main(outdir: Path, fmax: float) -> None:
         # so nothing here is spent relaxing sites with no binding track record.
         positions=("ontop", "bridge", "hollow"), max_per_position=None,
         seed_standoff=SEED_STANDOFF, desorb_early_stop_step=DESORB_CHECK_STEP,
-        extend_if_approaching=True, extend_steps=EXTEND_STEPS,
+        extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
     ))
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=fmax))
     outdir.mkdir(parents=True, exist_ok=True)
@@ -277,7 +296,7 @@ def main(outdir: Path, fmax: float) -> None:
                     "model": model, "oxide": oxide, "site_index": None, "symmetry_class": None,
                     "orientation": None, "failed": True, "error": f"pair-level: {e}"[:500],
                     "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
-                    "extended": None, "converged": None, "nsteps": None,
+                    "extended": None, "extensions_used": None, "converged": None, "nsteps": None,
                 }]
             with results_path.open("a") as f:
                 for r in rows:

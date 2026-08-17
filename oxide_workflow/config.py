@@ -55,6 +55,7 @@ class AdsorbateConfig:
     # trajectory that hadn't finished. False = disabled (default).
     extend_if_approaching: bool = False
     extend_steps: int = 100
+    max_extensions: int = 1  # repeatable up to this many rounds, each requiring progress
 
 # Named fragments for --adsorbate. First entry is the binding atom and must sit at z=0:
 # pymatgen anchors the lowest-z atom on the site, so ordering sets which end faces the surface.

@@ -411,6 +411,7 @@ def _relax_record(
         desorb_check_step=desorb_check_step,
         extend_if_approaching=extend_if_approaching,
         extend_steps=cfg.adsorbate.extend_steps,
+        max_extensions=cfg.adsorbate.max_extensions,
     )
     # Post-relaxation sanity flags. The adsorbate displacement is the direct evidence of a
     # non-interacting placement (adsorbate frozen at its start); start_fmax is meaningful

@@ -77,6 +77,7 @@ def relax(
     desorb_check_step: int | None = None,  # step at which to test for net outward drift
     extend_if_approaching: bool = False,  # give max_steps one extension if still closing in
     extend_steps: int = 100,
+    max_extensions: int = 1,  # repeatable up to this many rounds, each requiring progress
 ) -> RelaxResult:
 
     if not backend.can_relax:
@@ -108,6 +109,7 @@ def relax(
         "desorb_check_step": desorb_check_step,
         "extend_if_approaching": extend_if_approaching,
         "extend_steps": extend_steps,
+        "max_extensions": max_extensions,
     }
     jobfile = work / "job.json"
     jobfile.write_text(json.dumps(spec, indent=2))
@@ -147,6 +149,7 @@ def relax(
             "opt_log": opt_log.read_text() if opt_log.exists() else "",
             "early_stopped_desorbing": result.get("early_stopped_desorbing", False),
             "extended": result.get("extended", False),
+            "extensions_used": result.get("extensions_used", 0),
         },
     )
 

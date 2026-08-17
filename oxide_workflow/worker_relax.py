@@ -74,11 +74,20 @@ def max_force(atoms) -> float:
     return float(np.sqrt((f ** 2).sum(axis=1)).max())
 
 
-def min_adsorbate_surface_distance(atoms, n_ads: int) -> float:
-    """Shortest distance between any of the last ``n_ads`` (adsorbate) atoms and any atom
-    before them (the surface). Adsorbate atoms are always appended last (see stages.py)."""
+def anchor_surface_distance(atoms, n_ads: int) -> float:
+    """Distance from the adsorbate's ANCHOR atom (index -n_ads, its first/binding atom --
+    see config.py's ADSORBATE_FRAGMENTS convention: "first entry is the binding atom") to
+    its nearest surface neighbor. Adsorbate atoms are always appended last (see stages.py).
+
+    Deliberately the anchor alone, not the whole fragment's minimum distance: tracking
+    every adsorbate atom would also catch a legitimate reorientation (the far end of a
+    molecule swinging toward a different surface atom while still bonded) as if it were
+    desorption. A genuine float-off moves the anchor -- the actual bond -- away from the
+    surface; a reorientation moves the OTHER atoms around a still-bonded anchor.
+    """
+    anchor_idx = len(atoms) - n_ads
     d = atoms.get_all_distances(mic=True)
-    return float(d[-n_ads:, :-n_ads].min())
+    return float(d[anchor_idx, :anchor_idx].min())
 
 
 def main(jobfile: str) -> None:
@@ -107,24 +116,30 @@ def main(jobfile: str) -> None:
         traj.unlink()
     write(traj, atoms, format="extxyz", append=True)  # frame 0 = initial (calc already primed)
 
-    # Optional early-stop: at desorb_check_step, compare the adsorbate's distance to the
-    # surface against its starting distance. Net outward drift by then means the site was
-    # never going to bind (see checks.py's post-hoc "adsorbate desorbed" flag, which this
-    # complements by catching the same failure mode *during* relaxation instead of after
-    # burning the full step budget on it).
+    # Optional early-stop: at desorb_check_step, compare the ANCHOR atom's distance to the
+    # surface against its starting distance (see anchor_surface_distance -- deliberately not
+    # the whole fragment, so a legitimate reorientation of the far atoms doesn't get flagged
+    # as desorption). Net outward drift of the anchor by then means the bond itself is
+    # breaking, not just the molecule reorienting (see checks.py's post-hoc "adsorbate
+    # desorbed" flag, which this complements by catching the same failure mode *during*
+    # relaxation instead of after burning the full step budget on it).
     n_ads = spec.get("desorb_check_n_ads")
     check_step = spec.get("desorb_check_step")
     early_stopped_desorbing = False
-    d_start = min_adsorbate_surface_distance(atoms, n_ads) if n_ads and check_step else None
+    d_start = anchor_surface_distance(atoms, n_ads) if n_ads and check_step else None
 
     # The reverse case: max_steps runs out unconverged, but the adsorbate is still
     # net-approaching the surface (real work still happening, not oscillation) -- checked
     # by comparing distance at (max_steps - extend_steps) against distance at max_steps.
+    # Repeatable up to max_extensions rounds, each one comparing against the previous
+    # round's starting distance, for a start far enough out that one extension isn't
+    # necessarily enough to finish the approach.
     extend_if_approaching = bool(spec.get("extend_if_approaching", False))
     extend_steps = int(spec.get("extend_steps", 100))
+    max_extensions = int(spec.get("max_extensions", 1))
     extend_window_step = max(max_steps - extend_steps, 0) if extend_if_approaching and n_ads else None
     d_before_extend_window = None
-    extended = False
+    extensions_used = 0
 
     opt = optimizer(target, logfile=str(workdir / "opt.log"))
     opt.attach(lambda: write(traj, atoms, format="extxyz", append=True), interval=1)
@@ -132,26 +147,31 @@ def main(jobfile: str) -> None:
     if n_ads and (check_step or extend_if_approaching):
         for _converged in opt.irun(fmax=fmax, steps=max_steps):
             if check_step and opt.nsteps == check_step:
-                d_now = min_adsorbate_surface_distance(atoms, n_ads)
+                d_now = anchor_surface_distance(atoms, n_ads)
                 if d_now > d_start:
                     early_stopped_desorbing = True
                     break
             if extend_window_step is not None and opt.nsteps == extend_window_step:
-                d_before_extend_window = min_adsorbate_surface_distance(atoms, n_ads)
+                d_before_extend_window = anchor_surface_distance(atoms, n_ads)
 
-        if (
+        while (
             not early_stopped_desorbing
+            and extend_if_approaching
             and d_before_extend_window is not None
             and max_force(atoms) > fmax
+            and extensions_used < max_extensions
         ):
-            d_now = min_adsorbate_surface_distance(atoms, n_ads)
-            if d_now < d_before_extend_window:  # still net-closing the gap -- give it more
-                extended = True
-                for _converged in opt.irun(fmax=fmax, steps=extend_steps):
-                    pass
+            d_now = anchor_surface_distance(atoms, n_ads)
+            if not (d_now < d_before_extend_window):  # stopped closing the gap -- done extending
+                break
+            d_before_extend_window = d_now  # this round's "now" is next round's baseline
+            for _converged in opt.irun(fmax=fmax, steps=extend_steps):
+                pass
+            extensions_used += 1
     else:
         opt.run(fmax=fmax, steps=max_steps)
     elapsed = time.time() - t0
+    extended = extensions_used > 0
 
     n_frames = sum(1 for line in traj.read_text().splitlines() if line.strip().isdigit())
 
@@ -170,6 +190,7 @@ def main(jobfile: str) -> None:
         "n_frames": n_frames,
         "early_stopped_desorbing": early_stopped_desorbing,
         "extended": extended,
+        "extensions_used": extensions_used,
     }
     write(workdir / spec["output_poscar"], atoms, format="vasp")
     (workdir / spec["result_json"]).write_text(json.dumps(result, indent=2))
