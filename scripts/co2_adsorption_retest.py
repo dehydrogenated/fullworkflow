@@ -205,12 +205,25 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
     for cand in candidates:
         anchor_idx = len(cand.structure) - n_ads
         for label, oriented in azimuthal_orientations(cand.structure, anchor_idx, n_ads):
-            res = relax(
-                oriented, backend,
-                fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
-                desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
-                extend_if_approaching=True, extend_steps=EXTEND_STEPS,
-            )
+            try:
+                res = relax(
+                    oriented, backend,
+                    fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
+                    desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
+                    extend_if_approaching=True, extend_steps=EXTEND_STEPS,
+                )
+            except Exception as e:
+                row = {
+                    "model": model, "oxide": oxide, "site_index": cand.site_id["site_index"],
+                    "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
+                    "failed": True, "error": str(e)[:500],
+                    "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
+                    "extended": None, "converged": None, "nsteps": None,
+                }
+                rows.append(row)
+                print(f"    site{row['site_index']} {label:14s} RELAX FAILED: "
+                      f"{row['error'][:200]}", flush=True)
+                continue
             e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
             angle = res.structure.get_angle(anchor_idx, anchor_idx + 1, anchor_idx + n_ads - 1)
             desorbing = bool(res.meta.get("early_stopped_desorbing"))
@@ -218,6 +231,7 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> list[dict]:
             row = {
                 "model": model, "oxide": oxide, "site_index": cand.site_id["site_index"],
                 "symmetry_class": cand.site_id["symmetry_class"], "orientation": label,
+                "failed": False, "error": None,
                 "e_ads_eV": e_ads, "oco_angle_deg": angle, "desorbing": desorbing,
                 "extended": extended, "converged": res.converged, "nsteps": res.nsteps,
             }
@@ -244,13 +258,36 @@ def main(outdir: Path, fmax: float) -> None:
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=fmax))
     outdir.mkdir(parents=True, exist_ok=True)
     results_path = outdir / "results_retest.jsonl"
+
+    # One (model, oxide) pair failing before it even reaches the per-orientation loop
+    # (bulk/slab relax, gas reference, site-finding) must not cost the other 9 pairs on an
+    # unattended overnight run -- same pattern as sockeye_oc22.sh's model sweep. Individual
+    # relax() failures inside the orientation loop are already caught in run_one() itself;
+    # this is the outer net for everything before that.
+    pair_failures: list[tuple[str, str, str]] = []
     for model in MODELS:
         for oxide in OXIDES:
-            rows = run_one(model, oxide, outdir, cfg)
+            try:
+                rows = run_one(model, oxide, outdir, cfg)
+            except Exception as e:
+                print(f"  [{model} / {oxide}] PAIR FAILED before orientation loop: {e}",
+                      flush=True)
+                pair_failures.append((model, oxide, str(e)[:500]))
+                rows = [{
+                    "model": model, "oxide": oxide, "site_index": None, "symmetry_class": None,
+                    "orientation": None, "failed": True, "error": f"pair-level: {e}"[:500],
+                    "e_ads_eV": None, "oco_angle_deg": None, "desorbing": None,
+                    "extended": None, "converged": None, "nsteps": None,
+                }]
             with results_path.open("a") as f:
                 for r in rows:
                     f.write(json.dumps(r) + "\n")
+
     print(f"\nwrote {results_path}")
+    if pair_failures:
+        print(f"\n{len(pair_failures)} (model, oxide) pair(s) failed before relaxing any site:")
+        for model, oxide, err in pair_failures:
+            print(f"  {model:16s}{oxide:8s}{err[:150]}")
 
 
 if __name__ == "__main__":
