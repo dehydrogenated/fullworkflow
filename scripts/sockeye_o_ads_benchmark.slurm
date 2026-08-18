@@ -69,6 +69,9 @@ OUT="$SLURM_SUBMIT_DIR/runs/o_ads_benchmark"
 python "$REPO/scripts/o_adsorption_benchmark.py" "$OUT" --fmax 0.02
 
 echo
+python "$REPO/scripts/o_ads_report.py" "$OUT"
+
+echo
 echo "results in scratch: $OUT/results.jsonl"
 echo "to keep them, run this on the LOGIN node (scratch is purged on a timer):"
 D="$PROJECT/runs/$(date +%Y%m%d-%H%M%S)_o_ads_benchmark"
