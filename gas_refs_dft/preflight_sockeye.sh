@@ -16,34 +16,58 @@ esac
 # ---------------------------------------------------------------------------
 # 1. Does VASP exist here at all, and does it provide vasp_gam?
 # ---------------------------------------------------------------------------
+# Three distinct outcomes that must not be collapsed into one "not found":
+#   (a) no VASP anywhere
+#   (b) VASP present but its module is hidden -- licensed software on Sockeye is
+#       gated behind a Unix group, and is invisible to `spider` until you are in it
+#   (c) VASP present as a group-compiled binary with no module entry at all
+# So this asks the module system AND the filesystem, and prints raw output rather
+# than a verdict, because only (a) is actually blocking.
 echo
-echo "=== 1. VASP module ==="
-spider_out=$(module spider vasp 2>&1)
-if echo "$spider_out" | grep -qi "unable to find\|error"; then
-    echo "NOT FOUND. Sockeye exposes no VASP module to you."
-    echo "  VASP is licensed per-group and is usually gated behind a module"
-    echo "  restricted to licence holders -- 'not found' can mean 'not licensed"
-    echo "  to st-akkiraju-1' rather than 'not installed'."
-    echo "  STOP HERE and ask Kiran whether the group holds a VASP licence."
-    VASP_OK=0
+echo "=== 1a. is the module system even available in this shell? ==="
+if ! command -v module >/dev/null 2>&1 && ! declare -F module >/dev/null 2>&1; then
+    echo "  'module' is not defined here. Re-run as:  bash -l ./preflight_sockeye.sh"
+    echo "  (everything below in section 1 is meaningless until this is fixed)"
 else
-    echo "$spider_out" | grep -iE "^\s*vasp" | head -20
-    VASP_OK=1
+    module --version 2>&1 | head -3
 fi
 
-# vasp_gam is what the job wants: Gamma-only, ~2x faster than vasp_std here.
 echo
-echo "--- binaries on PATH after loading (try each candidate module) ---"
-for mod in $(echo "$spider_out" | grep -oE "vasp/[A-Za-z0-9._-]+" | sort -u); do
-    ( module purge >/dev/null 2>&1
-      if module load "$mod" >/dev/null 2>&1; then
-          gam=$(command -v vasp_gam || echo "-")
-          std=$(command -v vasp_std || echo "-")
-          printf "  %-24s vasp_gam=%s  vasp_std=%s\n" "$mod" "$gam" "$std"
-      else
-          printf "  %-24s LOAD FAILED (likely a licence-restricted module)\n" "$mod"
-      fi )
+echo "=== 1b. raw 'module spider vasp' output ==="
+module spider vasp 2>&1 | head -40
+
+echo
+echo "=== 1c. other module-system views (a hidden module can show in one, not another) ==="
+echo "--- module avail | grep -i vasp ---"
+module avail 2>&1 | grep -i vasp || echo "  (nothing)"
+echo "--- module --ignore_cache avail | grep -i vasp   (stale spider cache is a real failure mode) ---"
+module --ignore_cache avail 2>&1 | grep -i vasp || echo "  (nothing)"
+echo "--- module keyword vasp ---"
+module keyword vasp 2>&1 | grep -i vasp || echo "  (nothing)"
+
+echo
+echo "=== 1d. VASP binaries on the filesystem (catches a group build with no module) ==="
+for root in /arc/project/st-akkiraju-1 /arc/software /opt/software /cvmfs; do
+    [ -d "$root" ] || continue
+    echo "--- under $root ---"
+    find "$root" -maxdepth 6 \( -name 'vasp_gam' -o -name 'vasp_std' -o -name 'vasp_ncl' -o -name 'vasp' \) \
+         -type f 2>/dev/null | head -10 || true
 done
+
+echo
+echo "=== 1e. your Unix groups (licensed software is gated by group membership) ==="
+# A group named for vasp means the licence exists and you are already in it. No
+# such group, but a colleague who can run VASP, means you need to be added --
+# that is a support ticket, not a dead end.
+id -Gn 2>/dev/null | tr ' ' '\n' | sort
+
+# Only a genuinely empty result across 1b-1d is blocking.
+if module spider vasp 2>&1 | grep -qiE "unable to find|error" \
+   && ! module avail 2>&1 | grep -qi vasp; then
+    VASP_OK=0
+else
+    VASP_OK=1
+fi
 
 # ---------------------------------------------------------------------------
 # 2. Which allocation codes can actually submit?
@@ -63,7 +87,7 @@ sacctmgr -nP show assoc user="$USER" format=Account,Partition 2>/dev/null | sort
 echo
 echo "=== 3. POTCAR library ==="
 found=0
-for root in /arc/project/st-akkiraju-1 /arc/software /arc/project/st-akkiraju-1/ssong18; do
+for root in /arc/project/st-akkiraju-1 /arc/software /opt/software; do
     [ -d "$root" ] || continue
     while IFS= read -r hit; do
         found=1
@@ -80,14 +104,24 @@ for root in /arc/project/st-akkiraju-1 /arc/software /arc/project/st-akkiraju-1/
                 printf "    %-2s MISSING\n" "$el"
             fi
         done
-    done < <(find "$root" -maxdepth 4 -type d \( -name "potpaw_PBE*" -o -name "*PBE.54*" -o -name "*PBE_54*" \) 2>/dev/null)
+    done < <(find "$root" -maxdepth 6 -type d \( -name "potpaw_PBE*" -o -name "*PBE.54*" -o -name "*PBE_54*" \) 2>/dev/null)
 done
-[ "$found" -eq 0 ] && echo "  none found under the searched roots -- ask Kiran where the group keeps them."
+if [ "$found" -eq 0 ]; then
+    echo "  no potpaw_PBE* directory found. Widening to any file literally named POTCAR:"
+    for root in /arc/project/st-akkiraju-1 /arc/software; do
+        [ -d "$root" ] || continue
+        find "$root" -maxdepth 7 -name POTCAR -type f 2>/dev/null | head -10
+    done
+    echo "  (still nothing -> ask Kiran where the group keeps the pseudopotentials)"
+fi
 
 echo
 echo "=== verdict ==="
 if [ "${VASP_OK:-0}" -eq 0 ]; then
-    echo "BLOCKED: no VASP. Nothing else in this folder can run."
+    echo "No VASP found by module OR on the filesystem."
+    echo "  This is NOT proof it is unavailable: licensed modules stay hidden until"
+    echo "  your account is added to the licence group. Send Kiran / ARC support"
+    echo "  sections 1b-1e above and ask which group grants VASP access."
 else
     echo "Report the three sections above before editing submit_gas_refs.slurm."
     echo "For O, expect a TITEL dated 2015 or later for the .54 set."
