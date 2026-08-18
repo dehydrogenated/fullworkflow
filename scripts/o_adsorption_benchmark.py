@@ -34,6 +34,8 @@ from oxide_workflow.stages import adsorbate_candidates, make_slab
 from oxide_workflow.structures import get_structure
 
 MODELS = ["MACE-mh1-omat", "UMA-omat", "UMA-oc22"]
+# Opt-in via --models; not run by default so the original 3-model comparison stays stable.
+EXTRA_MODELS = ["UMA-oc20", "MACE-mh1-oc20"]
 SEED_STANDOFF = 0.5
 DESORB_TOL = 2.0
 DESORB_CHECK_STEP = 100
@@ -196,6 +198,6 @@ if __name__ == "__main__":
     ap.add_argument("outdir", type=Path)
     ap.add_argument("--fmax", type=float, default=0.02)
     ap.add_argument("--oxides", nargs="+", choices=ALL_OXIDES, default=list(ALL_OXIDES))
-    ap.add_argument("--models", nargs="+", choices=MODELS, default=MODELS)
+    ap.add_argument("--models", nargs="+", choices=MODELS + EXTRA_MODELS, default=MODELS)
     a = ap.parse_args()
     main(a.outdir, a.fmax, a.oxides, a.models)
