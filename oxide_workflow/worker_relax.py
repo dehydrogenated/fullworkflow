@@ -66,6 +66,15 @@ def build_calculator(spec: dict):
         # are cached locally by cached_path after that.
         orbff = getattr(pretrained, spec["model_path"])(device=spec.get("device", "cpu"))
         return ORBCalculator(orbff, device=spec.get("device", "cpu"))
+    if loader == "sevenn":
+        from sevenn.calculator import SevenNetCalculator
+
+        # task doubles as the SevenNet "modal" selector (e.g. "oc22", "omat24") --
+        # same multi-modality-checkpoint pattern as fairchem's task_name.
+        return SevenNetCalculator(
+            model=spec["model_path"], modal=spec.get("task", "mpa"),
+            device=spec.get("device", "cpu"), enable_cueq=False, enable_flash=False,
+        )
     raise ValueError(f"unknown loader: {loader!r}")
 
 

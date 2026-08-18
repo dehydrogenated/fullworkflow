@@ -35,7 +35,11 @@ from oxide_workflow.structures import get_structure
 
 MODELS = ["MACE-mh1-omat", "UMA-omat", "UMA-oc22"]
 # Opt-in via --models; not run by default so the original 3-model comparison stays stable.
-EXTRA_MODELS = ["UMA-oc20", "MACE-mh1-oc20"]
+EXTRA_MODELS = [
+    "UMA-oc20", "MACE-mh1-oc20",
+    "SevenNet-omni-oc22", "SevenNet-omni-oc20", "SevenNet-omni-omat24", "SevenNet-omni-mpa",
+    "UMA-M-oc22", "UMA-M-omat",
+]
 SEED_STANDOFF = 0.5
 DESORB_TOL = 2.0
 DESORB_CHECK_STEP = 100

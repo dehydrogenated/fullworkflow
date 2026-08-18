@@ -64,6 +64,9 @@ test -f "$OXW_MODEL_DIR/uma-s-1p2.pt" || {
     echo "missing checkpoint: $OXW_MODEL_DIR/uma-s-1p2.pt" >&2
     exit 1
 }
+# Optional extras -- only fatal if you actually pass a --models flag that needs them.
+test -f "$OXW_MODEL_DIR/sevennet-omni.pth" || echo "note: sevennet-omni.pth not staged (needed for SevenNet-omni-* models)"
+test -f "$OXW_MODEL_DIR/uma-m-1p1.pt" || echo "note: uma-m-1p1.pt not staged (needed for UMA-M-* models)"
 
 OUT="$SLURM_SUBMIT_DIR/runs/o_ads_benchmark"
 # Extra sbatch args after the script path forward straight through, e.g.:

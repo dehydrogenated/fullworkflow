@@ -174,6 +174,13 @@ def relax(
 
 MACE_MH1 = str(MODEL_DIR / "mace-mh-1.model")
 UMA_CKPT = str(MODEL_DIR / "uma-s-1p2.pt")
+# Gated on HuggingFace (facebook/UMA, requires accepting the FAIR Chemistry License) --
+# not auto-fetchable. Download uma-m-1p1.pt by hand and place it in MODEL_DIR; nothing
+# else needed, _uma_m() below points at it the same way _uma() points at UMA_CKPT.
+# Heads-up: facebookresearch/fairchem#2095 reports uma-m-1p1 predictor construction
+# stalling indefinitely on some setups (uma-s loads fine) -- unresolved as of this
+# writing, so a hang on first load is a known issue, not necessarily a config mistake.
+UMA_M_CKPT = str(MODEL_DIR / "uma-m-1p1.pt")
 
 
 def _mace(name: str, head: str, labels: tuple[str, ...]) -> Backend:
@@ -186,6 +193,13 @@ def _mace(name: str, head: str, labels: tuple[str, ...]) -> Backend:
 def _uma(name: str, task: str, labels: tuple[str, ...]) -> Backend:
     return Backend(
         name=name, env="fairchem", loader="fairchem", model_path=UMA_CKPT,
+        task=task, training_labels=labels,
+    )
+
+
+def _uma_m(name: str, task: str, labels: tuple[str, ...]) -> Backend:
+    return Backend(
+        name=name, env="fairchem", loader="fairchem", model_path=UMA_M_CKPT,
         task=task, training_labels=labels,
     )
 
@@ -208,6 +222,18 @@ def _orb(name: str, checkpoint: str, labels: tuple[str, ...]) -> Backend:
     )
 
 
+SEVENNET_OMNI_CKPT = str(MODEL_DIR / "sevennet-omni.pth")
+
+
+def _sevennet(name: str, modal: str, labels: tuple[str, ...]) -> Backend:
+    # Like MACE/UMA, SevenNet-Omni is one multi-modality checkpoint; ``task`` doubles as
+    # the modal selector here (same field fairchem's task_name reuses).
+    return Backend(
+        name=name, env="sevenn", loader="sevenn", model_path=SEVENNET_OMNI_CKPT,
+        task=modal, training_labels=labels,
+    )
+
+
 REGISTRY: dict[str, Backend] = {
     # ---- MACE mace-mh-1 heads (mace_test.py: the model's real heads) --------------------
     # Reference: the OMat24 PBE head (bulk-mat, mixed-Hamiltonian) — the updated OMat24.
@@ -225,10 +251,22 @@ REGISTRY: dict[str, Backend] = {
     "UMA-omol": _uma("UMA-omol", "omol", ("OMol", "molec")),
     "UMA-odac": _uma("UMA-odac", "odac", ("ODAC", "MOF")),
     "UMA-omc": _uma("UMA-omc", "omc", ("OMC", "mol-cryst")),
+    # ---- UMA-M (uma-m-1p1, gated download -- see UMA_M_CKPT above) ----------------------
+    "UMA-M-oc22": _uma_m("UMA-M-oc22", "oc22", ("OC22", "oxide-cat")),
+    "UMA-M-omat": _uma_m("UMA-M-omat", "omat", ("OMat24", "bulk-mat")),
     # ---- CHGNet (env: chgnet) ------------------------------------------------------------
     "CHGNet-0.3.0": _chgnet("CHGNet-0.3.0", "0.3.0", ("MPtrj", "PBE/PBE+U")),
     # ---- Orb (env: orb) -------------------------------------------------------------------
     "Orb-v2": _orb("Orb-v2", "orb_v2", ("MPtrj+Alexandria", "PBE")),
+    # ---- SevenNet-Omni (env: sevenn) -- one checkpoint, modal = training-dataset selector,
+    # same pattern as MACE-mh1's heads / UMA's tasks. Modalities available in this
+    # checkpoint: omat24, mpa, omol25_low, omol25_high, matpes_pbe, matpes_r2scan,
+    # mp_r2scan, oc20, oc22, spice, qcml, odac23, pet_mad -- only the ones matching our
+    # existing MACE/UMA comparison axes are registered below; add more the same way.
+    "SevenNet-omni-oc22": _sevennet("SevenNet-omni-oc22", "oc22", ("OC22", "oxide-cat")),
+    "SevenNet-omni-oc20": _sevennet("SevenNet-omni-oc20", "oc20", ("OC20", "cat")),
+    "SevenNet-omni-omat24": _sevennet("SevenNet-omni-omat24", "omat24", ("OMat24", "bulk-mat")),
+    "SevenNet-omni-mpa": _sevennet("SevenNet-omni-mpa", "mpa", ("MPtrj+Alexandria", "PBE")),
 }
 
 # Convenience groupings for candidate sweeps (every head/task/checkpoint, minus the reference).
