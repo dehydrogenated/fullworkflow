@@ -90,15 +90,19 @@ def main(rundir: Path) -> None:
     by_model: dict[str, list[dict]] = defaultdict(list)
     for r in rows:
         by_model[r["model"]].append(r)
-        if r.get("e_ads_eV") is not None:
-            diff = r["e_ads_eV"] - r["lit_e_ads_eV"]
+        lit_e = r.get("lit_e_ads_eV")
+        lit_e_s = f"{lit_e:.3f}" if lit_e is not None else "--"
+        lit_bond = r.get("lit_bond_A")
+        lit_bond_s = f"{lit_bond:.3f}" if lit_bond is not None else "--"
+        if r.get("e_ads_eV") is not None and lit_e is not None:
+            diff = r["e_ads_eV"] - lit_e
             bond = r.get("bond_A")
             bond_s = f"{bond:.3f}" if bond is not None else "-"
-            print(f"{r['model']:16s}{r['oxide']:8s}{r['e_ads_eV']:>9.3f}{r['lit_e_ads_eV']:>11.3f}"
-                  f"{diff:>8.3f}{bond_s:>9s}{r['lit_bond_A']:>10.3f}{status_of(r):>28s}")
+            print(f"{r['model']:16s}{r['oxide']:8s}{r['e_ads_eV']:>9.3f}{lit_e_s:>11s}"
+                  f"{diff:>8.3f}{bond_s:>9s}{lit_bond_s:>10s}{status_of(r):>28s}")
         else:
-            print(f"{r['model']:16s}{r['oxide']:8s}{'--':>9s}{r['lit_e_ads_eV']:>11.3f}"
-                  f"{'--':>8s}{'--':>9s}{r['lit_bond_A']:>10.3f}{status_of(r):>28s}")
+            print(f"{r['model']:16s}{r['oxide']:8s}{'--':>9s}{lit_e_s:>11s}"
+                  f"{'--':>8s}{'--':>9s}{lit_bond_s:>10s}{status_of(r):>28s}")
 
     print(f"\n{'-'*60}\nPER-MODEL TREND FIDELITY (vs. Zhao & Kulik PBE/PW)\n{'-'*60}")
     print(f"{'model':16s}{'n':>4s}{'MAE E_ads':>11s}{'MAE bond':>10s}{'rank corr':>11s}")
