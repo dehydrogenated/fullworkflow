@@ -1,0 +1,367 @@
+"""H2O dissociation probe: does a well-oriented starting guess find the dissociated
+state (Ti5c-OH + O2c-H) on its own, without hand-building a separate endpoint or
+scanning a reaction coordinate?
+
+Places molecular H2O on the most undercoordinated surface Ti, oriented so one O-H bond
+points at the nearest bridging O2c -- giving the proton the shortest possible path to a
+second surface bond, rather than a blind vertical/tilted guess (contrast the CO2 track's
+azimuthal_orientations(), which sweeps blindly because there's no obvious "target atom"
+for CO2's secondary interaction). One full, unconstrained relaxation per model: if the
+model's own PES wants to transfer that H to O2c, this orientation gives it the best shot.
+
+Then: take whatever the relaxation settles into (dissociated, or still molecular but
+doubly-bonded), nudge the two fragments a small distance further apart on their own
+sites, and re-relax. If the nudged copy relaxes back to about the same energy/geometry,
+that's evidence of a genuine local minimum, not an artifact of where the starting
+orientation happened to land.
+
+Kowalski, Meyer & Marx, PRB 79, 115410 (2009) is the eventual literature target (Table VI
++ NEB barrier ~0.14-0.16 eV), but this script doesn't compare against it yet -- it only
+asks the prior, cheaper question: can each model find the dissociated basin at all.
+
+    python scripts/h2o_dissociation_probe.py runs/h2o_dissociation_probe
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+from dataclasses import replace
+from pathlib import Path
+
+import numpy as np
+from pymatgen.core import Structure
+
+from oxide_workflow import pipeline
+from oxide_workflow.backends import get_backend, relax
+from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig
+from oxide_workflow.energetics import adsorption_energy, gas_reference_energy
+from oxide_workflow.stages import (
+    _site_environments,
+    adsorbate_candidates,
+    exposed_surface_atoms,
+    make_slab,
+    site_label,
+)
+from oxide_workflow.structures import get_structure
+
+MP_ID = "mp-2657"
+MODELS = ["MACE-mh1-omat", "UMA-oc22", "SevenNet-omni-omat24"]
+FMAX = 0.02
+OH_BOND_MAX = 1.3  # A; beyond this an O-H has dissociated, not stretched (oc22_diverge.py precedent)
+NUDGE_DISTANCE = 0.3  # A total separation added between the two fragments before re-relaxing
+# +1 A past the config default (0.2) so the molecule starts with real room to reorient
+# during relaxation instead of nearly on top of its own answer, and reads clearly as a
+# separate starting frame rather than a placement glued to the surface.
+SEED_STANDOFF = 1.2
+DESORB_CHECK_STEP = 100
+DESORB_TREND_WINDOW = 20
+EXTEND_STEPS = 100
+MAX_EXTENSIONS = 3
+
+
+def _coordination_of(label: str) -> "int | None":
+    m = re.match(r"^[A-Za-z]+(\d+)c$", label or "")
+    return int(m.group(1)) if m else None
+
+
+def undercoordinated_metal_site(candidates):
+    metal_ontop = [
+        c for c in candidates
+        if c.site_id["symmetry_class"] == "ontop"
+        and c.site_id["site_label"] and not c.site_id["site_label"].startswith("O")
+    ]
+    if not metal_ontop:
+        raise RuntimeError("no metal ontop site found")
+    return min(metal_ontop, key=lambda c: _coordination_of(c.site_id["site_label"]) or 99)
+
+
+def find_ti_and_o2c_anchors(pristine: Structure) -> "tuple[int, int]":
+    """(ti_idx, o2c_idx): the most undercoordinated exposed Ti, and its nearest exposed
+    bridging O2c -- both substrate atom indices into ``pristine``, found independently of
+    adsorbate_candidates so the target direction is known before any fragment is placed."""
+    z = pristine.cart_coords[:, 2]
+    exposed = exposed_surface_atoms(pristine, depth=float(z.max() - z.min()))
+    environments = _site_environments(pristine)
+
+    ti_candidates = [i for i in exposed if environments[i][0] != "O"]
+    if not ti_candidates:
+        raise RuntimeError("no exposed metal atom found")
+    ti_idx = min(ti_candidates, key=lambda i: environments[i][2])  # lowest coordination number
+
+    o2c_candidates = [
+        i for i in exposed
+        if environments[i][0] == "O" and site_label(*environments[i][::2]) == "O2c"
+    ]
+    if not o2c_candidates:
+        raise RuntimeError("no exposed O2c site found")
+    o2c_idx = min(o2c_candidates, key=lambda i: pristine.get_distance(ti_idx, i))
+    return ti_idx, o2c_idx
+
+
+ORIENTATION_MODES = ("vertical", "vertical_flipped", "bisector", "single_h_ti_facing")
+
+
+def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    """Rotation matrix mapping unit vector ``a`` onto unit vector ``b`` (Rodrigues'
+    formula: rotate about axis = cross(a, b) by angle = arccos(dot(a, b))). Degenerate
+    when the cross product vanishes -- already aligned (identity) or exactly antiparallel
+    (180 deg about any axis perpendicular to ``a``, picked via an arbitrary second
+    reference vector since cross(a, a) gives no axis to rotate about)."""
+    cos_angle = float(np.clip(np.dot(a, b), -1.0, 1.0))
+    axis = np.cross(a, b)
+    axis_norm = np.linalg.norm(axis)
+
+    if axis_norm >= 1e-8:
+        axis = axis / axis_norm
+        angle = math.acos(cos_angle)
+        K = np.array([
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ])
+        return np.eye(3) + math.sin(angle) * K + (1.0 - cos_angle) * (K @ K)
+    if cos_angle > 0:
+        return np.eye(3)
+    perp = np.array([1.0, 0.0, 0.0])
+    axis = np.cross(a, perp)
+    axis = axis / np.linalg.norm(axis)
+    K = np.array([
+        [0.0, -axis[2], axis[1]],
+        [axis[2], 0.0, -axis[0]],
+        [-axis[1], axis[0], 0.0],
+    ])
+    return np.eye(3) + 2.0 * (K @ K)  # Rodrigues at theta=pi: sin=0, 1-cos=2
+
+
+def orient_toward(
+    structure: Structure, anchor_idx: int, n_ads: int, target_dir: np.ndarray,
+    mode: str = "bisector",
+) -> Structure:
+    """Reorient the placed fragment about its anchor atom (O) so it reaches toward
+    ``target_dir`` (a unit Cartesian vector, anchor -> target O2c). Preserves every H's
+    own O-H bond length (rotation only, no stretching). Returns a new Structure;
+    ``structure`` is untouched.
+
+    ``structure[anchor_idx]`` is the O atom (already placed at its real site);
+    ``structure[anchor_idx+1 .. anchor_idx+n_ads-1]`` are the two H atoms.
+
+    Several starting guesses, since it's not obvious a priori which one a given model's
+    PES prefers:
+
+    - ``"bisector"``: rigidly rotate the *whole* molecule so its default "up" direction
+      (the H-O-H bisector, which points straight away from the surface in
+      ADSORBATE_FRAGMENTS' H2O template -- both H's have positive z) points at O2c
+      instead. Both H's swing toward the target together, symmetric about the new axis.
+    - ``"single_h_ti_facing"``: leave the molecule's default lone-pair-down pose mirrored
+      through O first (z negated, so both H's start pointing back down toward Ti instead
+      of away from it -- the wedge opens toward the surface), then bend only whichever
+      single H sits closest in angle to ``target_dir`` onto it, leaving the other H at
+      its mirrored position. Picks the H needing the smaller rotation, purely to keep the
+      starting guess as close to the mirrored placement as possible.
+    - ``"vertical"``: no rotation at all -- the plain bent H2O template (both H's at
+      their default (0, +-0.757, 0.5859) position), straight up over the anchor. The O
+      is directly above the Ti in every mode (only the H's ever move), but this is the
+      untilted baseline for a plain visual sanity check.
+    - ``"vertical_flipped"``: the same plain bent template rotated 180 deg about the
+      y-axis through the O anchor (local x is always 0 in the template, so this is
+      exactly z -> -z for both H's) -- both H's now point down toward the surface
+      instead of up away from it. O stays exactly on top of Ti; only the H's flip.
+    """
+    if mode not in ORIENTATION_MODES:
+        raise ValueError(f"mode must be one of {ORIENTATION_MODES}, got {mode!r}")
+    target_dir = np.asarray(target_dir, dtype=float)
+    target_dir = target_dir / np.linalg.norm(target_dir)
+    anchor = structure[anchor_idx].coords
+    oriented = structure.copy()
+
+    if mode == "vertical":
+        return oriented
+
+    if mode == "vertical_flipped":
+        for k in range(anchor_idx + 1, anchor_idx + n_ads):
+            relative = structure[k].coords - anchor
+            oriented[k].coords = anchor + relative * np.array([-1.0, 1.0, -1.0])
+        return oriented
+
+    if mode == "bisector":
+        rotation = _rotation_aligning(np.array([0.0, 0.0, 1.0]), target_dir)
+        for k in range(anchor_idx + 1, anchor_idx + n_ads):
+            relative = structure[k].coords - anchor
+            oriented[k].coords = anchor + rotation @ relative
+        return oriented
+
+    # single_h / single_h_ti_facing: bend only the closer H onto target_dir, leave the
+    # other H at its (possibly mirrored) template position.
+    h_indices = list(range(anchor_idx + 1, anchor_idx + n_ads))
+    relatives = {k: structure[k].coords - anchor for k in h_indices}
+    if mode == "single_h_ti_facing":
+        relatives = {k: rel * np.array([1.0, 1.0, -1.0]) for k, rel in relatives.items()}
+
+    angle_to_target = {
+        k: math.acos(float(np.clip(np.dot(rel / np.linalg.norm(rel), target_dir), -1.0, 1.0)))
+        for k, rel in relatives.items()
+    }
+    bend_idx = min(h_indices, key=lambda k: angle_to_target[k])
+    bond_length = float(np.linalg.norm(relatives[bend_idx]))
+    oriented[bend_idx].coords = anchor + bond_length * target_dir
+    for k, rel in relatives.items():
+        if k != bend_idx:
+            oriented[k].coords = anchor + rel
+    return oriented
+
+
+def is_dissociated(structure: Structure, h_idx: int, o_water_idx: int, o2c_idx: int) -> bool:
+    """True once the oriented H has left the water oxygen's bonding range and entered the
+    bridging O2c's -- i.e. a real O-H bond broke and a new one formed, not just a stretch
+    (OH_BOND_MAX matches oc22_diverge.py's own dissociated-vs-stretched cutoff)."""
+    return (
+        structure.get_distance(h_idx, o_water_idx) > OH_BOND_MAX
+        and structure.get_distance(h_idx, o2c_idx) < OH_BOND_MAX
+    )
+
+
+def nudge_apart(
+    structure: Structure, h_idx: int, o_water_idx: int, o2c_idx: int, other_h_idx: int,
+    distance: float,
+) -> Structure:
+    """Separate the two fragments -- {O_water, other H} staying near Ti, {h_idx} near
+    O2c -- by ``distance`` total, split between both sides, each nudged straight away
+    from the other fragment. Tests whether the settled configuration is a real local
+    minimum (the nudged copy relaxes back to ~the same energy) or just resting where the
+    first relaxation happened to stop."""
+    nudged = structure.copy()
+    away_from_o2c = structure[o_water_idx].coords - structure[o2c_idx].coords
+    away_from_o2c = away_from_o2c / np.linalg.norm(away_from_o2c)
+    away_from_ti = -away_from_o2c
+
+    for idx in (o_water_idx, other_h_idx):
+        nudged[idx].coords = structure[idx].coords + (distance / 2) * away_from_o2c
+    nudged[h_idx].coords = structure[h_idx].coords + (distance / 2) * away_from_ti
+    return nudged
+
+
+def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) -> "dict | None":
+    backend = get_backend(model)
+    odir = outdir / model
+
+    def relax_record(structure, stage, source_desc, relax_cell=False):
+        out = pipeline._relax_record(
+            structure, backend, stage=stage, protocol="reference",
+            geometry_source=source_desc, cfg=cfg, outdir=odir,
+            relax_cell=relax_cell, canonical=True,
+        )
+        print(f"    {stage:14s} E={out.energy:.4f} eV  {out.header['nsteps']} steps  "
+              f"{out.elapsed_s:.0f}s", flush=True)
+        return out
+
+    print(f"[{model}]", flush=True)
+    start = get_structure(MP_ID)
+    bulk = relax_record(start, "bulk", "db", relax_cell=True).structure
+    slab_in = make_slab(bulk, cfg.slab)
+    slab_out = relax_record(slab_in, "slab", "cut_from_relaxed_bulk")
+    pristine_energy = slab_out.energy
+    pristine_structure = slab_out.structure
+
+    ti_idx, o2c_idx = find_ti_and_o2c_anchors(pristine_structure)
+    print(f"    Ti anchor idx={ti_idx}, target O2c idx={o2c_idx}, "
+          f"distance={pristine_structure.get_distance(ti_idx, o2c_idx):.3f} A", flush=True)
+
+    h2o_species, h2o_coords = ADSORBATE_FRAGMENTS["H2O"]
+    n_ads = len(h2o_species)
+    e_gas = gas_reference_energy(
+        backend, cfg, pipeline.relax, species=h2o_species, coords=h2o_coords,
+    )
+
+    candidates = adsorbate_candidates(
+        pristine_structure,
+        replace(cfg.adsorbate, species=h2o_species, coords=h2o_coords, positions=("ontop",),
+                seed_standoff=SEED_STANDOFF),
+        freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
+    )
+    cand = undercoordinated_metal_site(candidates)
+    anchor_idx = len(cand.structure) - n_ads  # O
+    h_near_idx, h_far_idx = anchor_idx + 1, anchor_idx + 2
+
+    target_dir = pristine_structure[o2c_idx].coords - pristine_structure[ti_idx].coords
+    target_dir = target_dir / np.linalg.norm(target_dir)
+
+    rows = []
+    for mode in ORIENTATION_MODES:
+        oriented = orient_toward(cand.structure, anchor_idx, n_ads, target_dir, mode=mode)
+
+        if dump_frame:
+            frame_path = odir / "adsorbate" / mode / "starting_frame.vasp"
+            frame_path.parent.mkdir(parents=True, exist_ok=True)
+            oriented.to(filename=str(frame_path), fmt="poscar")
+            print(f"    [{mode}] wrote {frame_path} -- unrelaxed, no adsorbate "
+                  f"relaxation run", flush=True)
+            continue
+
+        res = relax(
+            oriented, backend, workdir=odir / "adsorbate" / mode,
+            fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
+            desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
+            desorb_trend_window=DESORB_TREND_WINDOW,
+            extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
+        )
+        e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
+        dissociated = is_dissociated(res.structure, h_near_idx, anchor_idx, o2c_idx)
+        print(f"    [{mode}] E_ads={e_ads:+.4f} eV  dissociated={dissociated}  "
+              f"converged={res.converged}  nsteps={res.nsteps}", flush=True)
+
+        nudged = nudge_apart(res.structure, h_near_idx, anchor_idx, o2c_idx, h_far_idx, NUDGE_DISTANCE)
+        res_nudged = relax(
+            nudged, backend, workdir=odir / "adsorbate" / mode / "nudged",
+            fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
+            desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
+            desorb_trend_window=DESORB_TREND_WINDOW,
+            extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
+        )
+        e_ads_nudged = adsorption_energy(res_nudged.energy, pristine_energy, e_gas)
+        dissociated_nudged = is_dissociated(res_nudged.structure, h_near_idx, anchor_idx, o2c_idx)
+        print(f"    [{mode}] nudged E_ads={e_ads_nudged:+.4f} eV  dissociated={dissociated_nudged}  "
+              f"converged={res_nudged.converged}  nsteps={res_nudged.nsteps}  "
+              f"dE_from_nudge={e_ads_nudged - e_ads:+.4f} eV", flush=True)
+
+        rows.append({
+            "model": model, "orientation": mode, "ti_idx": ti_idx, "o2c_idx": o2c_idx,
+            "e_ads_eV": e_ads, "dissociated": dissociated,
+            "converged": res.converged, "nsteps": res.nsteps,
+            "e_ads_nudged_eV": e_ads_nudged, "dissociated_nudged": dissociated_nudged,
+            "converged_nudged": res_nudged.converged, "nsteps_nudged": res_nudged.nsteps,
+            "d_e_nudge_eV": e_ads_nudged - e_ads,
+        })
+
+    return rows or None
+
+
+def main(outdir: Path, models: list[str], dump_frame: bool) -> None:
+    cfg = RunConfig()
+    cfg = replace(cfg, relax=replace(cfg.relax, fmax=FMAX))
+    outdir.mkdir(parents=True, exist_ok=True)
+    results_path = outdir / "results.jsonl"
+    for model in models:
+        rows = run_one(model, outdir, cfg, dump_frame=dump_frame)
+        if not rows:
+            continue
+        with results_path.open("a") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+    if not dump_frame:
+        print(f"\nwrote {results_path}")
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("outdir", type=Path)
+    ap.add_argument("--models", nargs="+", default=MODELS, choices=MODELS)
+    ap.add_argument(
+        "--dump-frame", action="store_true",
+        help="write the oriented, unrelaxed starting structure and stop -- no adsorbate "
+             "relaxation, for a visual check (e.g. in OVITO) before committing to a run.",
+    )
+    a = ap.parse_args()
+    main(a.outdir, a.models, a.dump_frame)
