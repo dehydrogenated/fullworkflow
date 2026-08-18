@@ -2,7 +2,13 @@
   "permissions": {
     "allow": [
       "Bash(python -c ' *)",
-      "Bash(grep -n \"^47$\" /Users/ssong/Downloads/trajectory.xyz)"
+      "Bash(grep -n \"^47$\" /Users/ssong/Downloads/trajectory.xyz)",
+      "WebFetch(domain:claude.ai)",
+      "Bash(cp -r runs/ovfe_tio2_benchmark/MACE-mh1-omat/bulk runs/h2o_dissociation_probe/MACE-mh1-omat/bulk)",
+      "Bash(cp -r runs/ovfe_tio2_benchmark/MACE-mh1-omat/slab runs/h2o_dissociation_probe/MACE-mh1-omat/slab)",
+      "Bash(python3 scripts/h2o_dissociation_probe.py runs/h2o_dissociation_probe --models MACE-mh1-omat --dump-frame)",
+      "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
+      "Bash(pip show *)"
     ]
   }
 }
