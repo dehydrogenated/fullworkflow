@@ -51,7 +51,9 @@ MP_ID = "mp-2657"
 MODELS = ["MACE-mh1-omat", "UMA-oc22", "SevenNet-omni-omat24"]
 FMAX = 0.02
 OH_BOND_MAX = 1.3  # A; beyond this an O-H has dissociated, not stretched (oc22_diverge.py precedent)
-NUDGE_DISTANCE = 0.3  # A total separation added between the two fragments before re-relaxing
+# A; target O-H bond length to snap the transferring H onto O2c for the nudge step --
+# matches ADSORBATE_FRAGMENTS["H2O"]'s own O-H length (norm of (0, 0.757, 0.5859)).
+NUDGE_TARGET_BOND = 0.957
 # +1 A past the config default (0.2) so the molecule starts with real room to reorient
 # during relaxation instead of nearly on top of its own answer, and reads clearly as a
 # separate starting frame rather than a placement glued to the surface.
@@ -224,22 +226,26 @@ def is_dissociated(structure: Structure, h_idx: int, o_water_idx: int, o2c_idx: 
 
 
 def nudge_apart(
-    structure: Structure, h_idx: int, o_water_idx: int, o2c_idx: int, other_h_idx: int,
-    distance: float,
+    structure: Structure, h_idx: int, o2c_idx: int, target_bond_length: float = NUDGE_TARGET_BOND,
 ) -> Structure:
-    """Separate the two fragments -- {O_water, other H} staying near Ti, {h_idx} near
-    O2c -- by ``distance`` total, split between both sides, each nudged straight away
-    from the other fragment. Tests whether the settled configuration is a real local
-    minimum (the nudged copy relaxes back to ~the same energy) or just resting where the
-    first relaxation happened to stop."""
-    nudged = structure.copy()
-    away_from_o2c = structure[o_water_idx].coords - structure[o2c_idx].coords
-    away_from_o2c = away_from_o2c / np.linalg.norm(away_from_o2c)
-    away_from_ti = -away_from_o2c
+    """Snap ``h_idx`` onto O2c at a real O-H bonding distance (``target_bond_length``,
+    the H2O template's own O-H length by default -- see NUDGE_TARGET_BOND) instead of a
+    small symmetric separation. A first relaxation only closed part of the gap (e.g. the
+    1.95 A the bisector run left it at, down from ~2.9-3.6 A at the start, but still far
+    from a bonded 0.96-ish A) -- rather than nudge a further fixed increment and hope,
+    finish the approach directly along H's own current direction to O2c, so the second
+    relaxation starts from "the transfer basically happened" instead of "a bit closer
+    than before." The water O and the other H are untouched: forcing H fully onto O2c
+    already stretches its old O-H bond on its own (real evidence for
+    ``is_dissociated()``, not a separate push needed).
 
-    for idx in (o_water_idx, other_h_idx):
-        nudged[idx].coords = structure[idx].coords + (distance / 2) * away_from_o2c
-    nudged[h_idx].coords = structure[h_idx].coords + (distance / 2) * away_from_ti
+    Tests whether the settled configuration is a real local minimum (the nudged copy
+    relaxes back to ~the same energy/geometry) or just resting where the first
+    relaxation happened to stop."""
+    nudged = structure.copy()
+    toward_o2c = structure[h_idx].coords - structure[o2c_idx].coords
+    toward_o2c = toward_o2c / np.linalg.norm(toward_o2c)
+    nudged[h_idx].coords = structure[o2c_idx].coords + target_bond_length * toward_o2c
     return nudged
 
 
@@ -283,7 +289,7 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
     )
     cand = undercoordinated_metal_site(candidates)
     anchor_idx = len(cand.structure) - n_ads  # O
-    h_near_idx, h_far_idx = anchor_idx + 1, anchor_idx + 2
+    h_near_idx = anchor_idx + 1
 
     target_dir = pristine_structure[o2c_idx].coords - pristine_structure[ti_idx].coords
     target_dir = target_dir / np.linalg.norm(target_dir)
@@ -312,7 +318,7 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
         print(f"    [{mode}] E_ads={e_ads:+.4f} eV  dissociated={dissociated}  "
               f"converged={res.converged}  nsteps={res.nsteps}", flush=True)
 
-        nudged = nudge_apart(res.structure, h_near_idx, anchor_idx, o2c_idx, h_far_idx, NUDGE_DISTANCE)
+        nudged = nudge_apart(res.structure, h_near_idx, o2c_idx)
         res_nudged = relax(
             nudged, backend, workdir=odir / "adsorbate" / mode / "nudged",
             fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
