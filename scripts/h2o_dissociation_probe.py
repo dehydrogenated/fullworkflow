@@ -69,6 +69,16 @@ def _coordination_of(label: str) -> "int | None":
     return int(m.group(1)) if m else None
 
 
+def min_image_vector(lattice, cart_a: np.ndarray, cart_b: np.ndarray) -> np.ndarray:
+    """The Cartesian displacement cart_a - cart_b through whichever periodic image makes
+    it shortest -- a raw ``cart_a - cart_b`` can point almost the full cell width and
+    backwards from the true short-way direction whenever the two points are close only
+    through the periodic boundary (e.g. one near x=0, the other near x=cell_a)."""
+    frac_diff = lattice.get_fractional_coords(cart_a - cart_b)
+    frac_diff -= np.round(frac_diff)
+    return lattice.get_cartesian_coords(frac_diff)
+
+
 def undercoordinated_metal_site(candidates):
     metal_ontop = [
         c for c in candidates
@@ -291,7 +301,9 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
     anchor_idx = len(cand.structure) - n_ads  # O
     h_near_idx = anchor_idx + 1
 
-    target_dir = pristine_structure[o2c_idx].coords - pristine_structure[ti_idx].coords
+    target_dir = min_image_vector(
+        pristine_structure.lattice, pristine_structure[o2c_idx].coords, pristine_structure[ti_idx].coords,
+    )
     target_dir = target_dir / np.linalg.norm(target_dir)
 
     rows = []
