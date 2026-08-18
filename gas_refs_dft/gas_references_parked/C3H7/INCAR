@@ -1,0 +1,33 @@
+SYSTEM = C3H7 gas-phase reference (MP conventions)
+! ---- matched to Materials Project / MPtrj static+relax settings ----
+PREC   = Accurate
+ENCUT  = 520          ! MP standard. MUST match your slab calculations.
+EDIFF  = 1E-6
+EDIFFG = -0.02
+ALGO   = Fast
+NELM   = 200
+NELMIN = 6
+LASPH  = .TRUE.       ! MP default
+LREAL  = .FALSE.      ! exact projection - cheap for a molecule, avoids LREAL=Auto noise
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+
+! ---- relaxation: ions only, NEVER the cell ----
+IBRION = 2
+ISIF   = 2            ! do NOT use ISIF=3 - you would collapse the vacuum box
+NSW    = 200
+
+! ---- molecule-in-a-box overrides of the MP solid-state defaults ----
+ISMEAR = 0            ! MP uses -5 (tetrahedron) for solids; illegal at a single k-point
+SIGMA  = 0.01
+ISYM   = 0            ! avoid symmetry-locking the molecule into a saddle point
+
+! ---- spin ----
+ISPIN   = 2
+NUPDOWN = 1          ! doublet radical
+MAGMOM  = 10*1.0
+
+! ---- NO Hubbard U ----
+! MP applies +U only to transition metals in oxides/fluorides. These molecules
+! contain none, so LDAU is off. See README for what this means for E_vac(O).
+LDAU = .FALSE.
