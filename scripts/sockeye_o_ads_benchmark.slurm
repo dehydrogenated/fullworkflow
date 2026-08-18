@@ -66,7 +66,9 @@ test -f "$OXW_MODEL_DIR/uma-s-1p2.pt" || {
 }
 
 OUT="$SLURM_SUBMIT_DIR/runs/o_ads_benchmark"
-python "$REPO/scripts/o_adsorption_benchmark.py" "$OUT" --fmax 0.02
+# Extra sbatch args after the script path forward straight through, e.g.:
+#   sbatch sockeye_o_ads_benchmark.slurm --models UMA-oc20 MACE-mh1-oc20
+python "$REPO/scripts/o_adsorption_benchmark.py" "$OUT" --fmax 0.02 "$@"
 
 echo
 python "$REPO/scripts/o_ads_report.py" "$OUT"
