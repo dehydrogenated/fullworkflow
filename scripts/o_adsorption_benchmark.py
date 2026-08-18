@@ -38,7 +38,7 @@ MODELS = ["MACE-mh1-omat", "UMA-omat", "UMA-oc22"]
 EXTRA_MODELS = [
     "UMA-oc20", "MACE-mh1-oc20",
     "SevenNet-omni-oc22", "SevenNet-omni-oc20", "SevenNet-omni-omat24", "SevenNet-omni-mpa",
-    "UMA-M-oc22", "UMA-M-omat",
+    "UMA-M-oc20", "UMA-M-omat",
 ]
 SEED_STANDOFF = 0.5
 DESORB_TOL = 2.0

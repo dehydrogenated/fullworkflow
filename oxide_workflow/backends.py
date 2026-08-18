@@ -252,7 +252,9 @@ REGISTRY: dict[str, Backend] = {
     "UMA-odac": _uma("UMA-odac", "odac", ("ODAC", "MOF")),
     "UMA-omc": _uma("UMA-omc", "omc", ("OMC", "mol-cryst")),
     # ---- UMA-M (uma-m-1p1, gated download -- see UMA_M_CKPT above) ----------------------
-    "UMA-M-oc22": _uma_m("UMA-M-oc22", "oc22", ("OC22", "oxide-cat")),
+    # No "oc22" head on this checkpoint (valid tasks: omc/omol/odac/oc20/omat -- confirmed
+    # via the actual ValueError on Sockeye, not assumed) -- oc20 is the closest available.
+    "UMA-M-oc20": _uma_m("UMA-M-oc20", "oc20", ("OC20", "cat")),
     "UMA-M-omat": _uma_m("UMA-M-omat", "omat", ("OMat24", "bulk-mat")),
     # ---- CHGNet (env: chgnet) ------------------------------------------------------------
     "CHGNet-0.3.0": _chgnet("CHGNet-0.3.0", "0.3.0", ("MPtrj", "PBE/PBE+U")),
