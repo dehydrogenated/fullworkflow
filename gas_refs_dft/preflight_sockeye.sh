@@ -42,16 +42,26 @@ echo "--- module avail | grep -i vasp ---"
 module avail 2>&1 | grep -i vasp || echo "  (nothing)"
 echo "--- module --ignore_cache avail | grep -i vasp   (stale spider cache is a real failure mode) ---"
 module --ignore_cache avail 2>&1 | grep -i vasp || echo "  (nothing)"
-echo "--- module keyword vasp ---"
-module keyword vasp 2>&1 | grep -i vasp || echo "  (nothing)"
+echo "--- module keyword vasp (RAW: a keyword hit is often a module whose NAME lacks the word) ---"
+module keyword vasp 2>&1 | head -30
+echo "--- regex spider, case-insensitive ---"
+module -r spider '.*[Vv][Aa][Ss][Pp].*' 2>&1 | head -30
+echo "--- regex avail, case-insensitive ---"
+module -r avail '.*[Vv][Aa][Ss][Pp].*' 2>&1 | head -30
 
 echo
 echo "=== 1d. VASP binaries on the filesystem (catches a group build with no module) ==="
-for root in /arc/project/st-akkiraju-1 /arc/software /opt/software /cvmfs; do
+# /cvmfs is deliberately absent: it is a lazily-mounted network filesystem, so a
+# find(1) walk over it stats the entire remote software stack and hangs. Query it
+# through the module system (1b/1c) instead. -mount keeps the walk on one
+# filesystem; timeout is a backstop for any other slow mount.
+for root in /arc/project/st-akkiraju-1 /arc/software /opt/software; do
     [ -d "$root" ] || continue
-    echo "--- under $root ---"
-    find "$root" -maxdepth 6 \( -name 'vasp_gam' -o -name 'vasp_std' -o -name 'vasp_ncl' -o -name 'vasp' \) \
-         -type f 2>/dev/null | head -10 || true
+    echo "--- under $root (60s cap) ---"
+    timeout 60 find "$root" -mount -maxdepth 6 \
+        \( -name 'vasp_gam' -o -name 'vasp_std' -o -name 'vasp_ncl' -o -name 'vasp' \) \
+        -type f 2>/dev/null | head -10
+    [ "${PIPESTATUS[0]}" = "124" ] && echo "  (timed out -- not a result either way)"
 done
 
 echo
@@ -104,13 +114,13 @@ for root in /arc/project/st-akkiraju-1 /arc/software /opt/software; do
                 printf "    %-2s MISSING\n" "$el"
             fi
         done
-    done < <(find "$root" -maxdepth 6 -type d \( -name "potpaw_PBE*" -o -name "*PBE.54*" -o -name "*PBE_54*" \) 2>/dev/null)
+    done < <(timeout 60 find "$root" -mount -maxdepth 6 -type d \( -name "potpaw_PBE*" -o -name "*PBE.54*" -o -name "*PBE_54*" \) 2>/dev/null)
 done
 if [ "$found" -eq 0 ]; then
     echo "  no potpaw_PBE* directory found. Widening to any file literally named POTCAR:"
     for root in /arc/project/st-akkiraju-1 /arc/software; do
         [ -d "$root" ] || continue
-        find "$root" -maxdepth 7 -name POTCAR -type f 2>/dev/null | head -10
+        timeout 60 find "$root" -mount -maxdepth 7 -name POTCAR -type f 2>/dev/null | head -10
     done
     echo "  (still nothing -> ask Kiran where the group keeps the pseudopotentials)"
 fi
