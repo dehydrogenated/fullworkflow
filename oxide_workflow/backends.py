@@ -22,9 +22,12 @@ from pymatgen.core import Structure
 
 WORKER = Path(__file__).parent / "worker_relax.py"
 
-# Sockeye's job scheduler sets these for its own conda/checkpoint locations; default to the local Mac layout otherwise.
+# Sockeye's job scheduler sets these for its own conda/checkpoint locations; default to the
+# local Mac layout otherwise. MODEL_DIR's default used to be ~/Desktop/mace_test/models --
+# moved in-repo (and off Desktop, which is iCloud-synced and can serve checkpoint reads as
+# unreadable stubs) since gitignored.
 CONDA_BASE = os.environ.get("OXW_CONDA_BASE", "/opt/anaconda3")
-MODEL_DIR = Path(os.environ.get("OXW_MODEL_DIR", Path.home() / "Desktop/mace_test/models"))
+MODEL_DIR = Path(os.environ.get("OXW_MODEL_DIR", Path(__file__).resolve().parent.parent / "models"))
 
 # Sockeye's job script sets this to "cuda" when SLURM granted a GPU; defaults to "cpu" for local Mac runs.
 DEVICE = os.environ.get("OXW_DEVICE", "cpu")
@@ -45,6 +48,11 @@ class Backend:
     can_relax: bool = True
     training_labels: tuple[str, ...] = ()
     python: Optional[str] = None  # override interpreter path; else derived from env
+    # Offline weights override -- currently only the "orb" loader consumes this (Orb has
+    # no hard-staged checkpoint like MACE/UMA; it fetches+caches from a public S3 URL on
+    # first use, which hangs on a network-less Sockeye compute node). If a file exists at
+    # this path, worker_relax.py loads from it directly instead of hitting the network.
+    checkpoint_path: Optional[str] = None
 
     # Returns which python do I launch to run this model
     def interpreter(self) -> str:
@@ -101,6 +109,7 @@ def relax(
         "dtype": backend.dtype,
         "task": backend.task,
         "head": backend.head,
+        "checkpoint_path": backend.checkpoint_path,
         "fmax": fmax,
         "max_steps": max_steps,
         "optimizer": optimizer,
@@ -181,6 +190,13 @@ UMA_CKPT = str(MODEL_DIR / "uma-s-1p2.pt")
 # stalling indefinitely on some setups (uma-s loads fine) -- unresolved as of this
 # writing, so a hang on first load is a known issue, not necessarily a config mistake.
 UMA_M_CKPT = str(MODEL_DIR / "uma-m-1p1.pt")
+# Unlike MACE/UMA, Orb has no license gate -- its weights are a plain public S3 download
+# (https://orbitalmaterials-public-models.s3.us-west-1.amazonaws.com/forcefields/
+# orb-v2-20241011.ckpt, found via inspecting orb_models.forcefield.pretrained.orb_v2's own
+# default `weights_path` argument). Download once and place at this path to stage it the
+# same way as MACE/UMA; if the file isn't there, _orb() below still works by falling back
+# to the function's built-in URL default (fine with network, hangs without it).
+ORB_V2_CKPT = str(MODEL_DIR / "orb-v2-20241011.ckpt")
 
 
 def _mace(name: str, head: str, labels: tuple[str, ...]) -> Backend:
@@ -215,9 +231,12 @@ def _chgnet(name: str, model_name: str, labels: tuple[str, ...]) -> Backend:
 
 def _orb(name: str, checkpoint: str, labels: tuple[str, ...]) -> Backend:
     # model_path is the pretrained-checkpoint function name in orb_models.forcefield.pretrained
-    # (e.g. "orb_v2"), not a file path — weights are fetched once and cached by cached_path.
+    # (e.g. "orb_v2"), not a file path -- selects which named loader function to call.
+    # checkpoint_path is the actual weights *file*, used only if staged at MODEL_DIR (see
+    # ORB_V2_CKPT above); otherwise the named function's own network default takes over.
     return Backend(
         name=name, env="orb", loader="orb", model_path=checkpoint,
+        checkpoint_path=ORB_V2_CKPT if checkpoint == "orb_v2" else None,
         training_labels=labels,
     )
 

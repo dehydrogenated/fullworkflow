@@ -1,0 +1,19 @@
+{
+  "_source": "Comer et al. 2022, SI Table S1 -- Hubbard U (eV) used for 3d bulk/surface DFT+U. 4d and 5d metals in this dataset were treated at plain PBE (no U).",
+  "_note": "MLIP checkpoints don't carry a Hubbard U term, so this isn't a knob to match -- it's provenance for what 'PBE+U' means for the literature ΔE_ads/ΔG_ads values in adsorption_energies.csv, i.e. why a DFT+U number and a plain-PBE MLIP number can disagree even when both are 'right'.",
+  "_ref_key": {
+    "1": "Zhao, Lamoureux, Kulkarni & Bajdich, ChemCatChem 2019, 11, 3423",
+    "2": "Jain et al., Phys. Rev. B 2011, 84, 045115 (Materials Project)",
+    "3": "Tkalych, Zhuang & Carter, ACS Catal. 2017, 5329"
+  },
+  "values_eV": {
+    "Ti": {"U": 3.00, "ref": "1"},
+    "V":  {"U": 3.25, "ref": "2"},
+    "Cr": {"U": 3.5,  "ref": "1"},
+    "Mn": {"U": 3.75, "ref": "1"},
+    "Fe": {"U": 4.3,  "ref": "3"},
+    "Co": {"U": 3.32, "ref": "2"},
+    "Ni": {"U": 6.45, "ref": "2"},
+    "Cu": {"U": 3.0,  "ref": "1"}
+  }
+}

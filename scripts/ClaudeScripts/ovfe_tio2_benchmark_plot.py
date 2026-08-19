@@ -36,7 +36,8 @@ SITES = {
 }
 LIT_CITATION = "Kowalski, Meyer & Marx, PRB 79, 115410 (2009), Table I, triplet state"
 
-MODELS = ["MACE-mh1-omat", "MACE-mh1-oc20", "UMA-omat", "UMA-oc22", "CHGNet-0.3.0", "Orb-v2"]
+MODELS = ["MACE-mh1-omat", "MACE-mh1-oc20", "UMA-omat", "UMA-oc22", "CHGNet-0.3.0", "Orb-v2",
+          "SevenNet-omni-omat24"]
 
 LIT_COLOR = "#898781"  # muted ink -- signals "reference", not a model prediction
 INK = "#0b0b0b"
@@ -111,7 +112,7 @@ def plot(rundir: Path, stats: dict[str, dict]) -> Path:
         ax.axhline(SITES[site]["lit"], color=color, lw=1.0, ls="--", alpha=0.5, zorder=0)
 
     ax.set_xticks(range(n_groups))
-    ax.set_xticklabels(group_labels, fontsize=9, color=INK)
+    ax.set_xticklabels(group_labels, fontsize=9, color=INK, rotation=20, ha="right")
     ax.set_ylabel("E$_{vac}$ (eV)", fontsize=11, color=INK)
     ax.set_title(
         "TiO$_2$(110) oxygen-vacancy formation energy vs. DFT\n"

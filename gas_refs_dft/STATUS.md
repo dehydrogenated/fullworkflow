@@ -32,7 +32,7 @@ entirely on that model's own energy scale, importing only the experimental water
 formation enthalpy — a portable *reaction* energy.
 
 That is strictly better than mixing a DFT number into an ML energy scale, and
-`scripts/ovfe_o2_correction.py` already says why in its docstring: there is no
+`scripts/ClaudeScripts/ovfe_o2_correction.py` already says why in its docstring: there is no
 bare absolute value that can be transplanted between scales, and two heads of one
 checkpoint can disagree by tens of eV on an identical cell.
 

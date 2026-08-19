@@ -2,7 +2,7 @@
 Every chemistry and relaxation knob.
 
 Defaults settings tuned for the stoichiometric rutile TiO2 (110) surface (pymatgen's
-termination index 1). ``scripts/validate_materials.py`` re-checks this for any new material.
+termination index 1). ``scripts/core/validate_materials.py`` re-checks this for any new material.
 
 Every value below has a matching command-line flag. Edit this file to change the
 default for everything; pass the flag to change one run. The flag always wins.
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 class SlabConfig:
     miller_index: tuple[int, int, int] = (1, 1, 0)  
     min_slab_size: float = 12.0  # Å; ≈4 trilayers of rutile (110) 
-    min_vacuum_size: float = 12.0  
+    min_vacuum_size: float = 20.0  
     termination_index: int = 1  # standard rutile(110)
     lll_reduce: bool = True # Allows equivalent basis with shorter closer-to-perpendicular lattice vectors, easier to work with
     center_slab: bool = True # Centres slab on Z, meaning slabGenerator can easily find highest atom for surface
@@ -69,6 +69,17 @@ ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, 
     "O2-side": (("O", "O"), ((0.0, -0.604, 0.0), (0.0, 0.604, 0.0))), # Side-on: both atoms at z=0
     "O": (("O",), ((0.0, 0.0, 0.0),)),
     "H2": (("H", "H"), ((0.0, 0.0, 0.0), (0.0, 0.0, 0.741))),  # gas-phase H-H = 0.741 A
+    # O-down, tilted 20 deg off vertical: O anchors to the surface metal cation, H points
+    # mostly away. O-H = 0.9573 A, same bond length as the H2O entry above. Only a
+    # relaxation seed, not a constraint -- exact final tilt is whatever the optimizer finds,
+    # and a 12-way orientation/standoff sweep on TiO2(110) confirmed every variant converges
+    # to the same final bond length and energy regardless of seed tilt. The tilt still
+    # matters for the *optimizer path*, though: pure-vertical (0 deg) and 40 deg both
+    # produced an oscillatory approach that tripped the desorption early-stop safety check
+    # even at 2x its default patience, while 20 deg and 60 deg converged cleanly and faster
+    # (fewer steps) every time. 20 deg picked over 60 to stay closer to the "H points away"
+    # literature convention (Comer et al. 2022) while still avoiding the bad basin.
+    "OH": (("O", "H"), ((0.0, 0.0, 0.0), (0.0, 0.3274, 0.8995))),
     # linear O=C=O, gas-phase C=O = 1.16 A; first O anchors to the surface metal cation
     # (Chavez-Rocha et al., Molecules 2023, 28, 1776: CO2 approaches M1-OA first, then may
     # bend toward a surface oxygen as a second interaction).

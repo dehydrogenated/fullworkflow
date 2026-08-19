@@ -97,7 +97,7 @@ def _resolve(identifier: str) -> tuple[Structure, dict]:
     if folder is None:
         raise KeyError(
             f"unknown material {identifier!r}. Available: {available()}. To add one, run "
-            f"`python scripts/fetch_structure.py {identifier}` on a networked machine "
+            f"`python scripts/core/fetch_structure.py {identifier}` on a networked machine "
             f"(needs MP_API_KEY) and commit the pair it writes to {STRUCTURE_DIR}."
         )
     cif_path, meta_path = folder / f"{identifier}.cif", folder / f"{identifier}.json"

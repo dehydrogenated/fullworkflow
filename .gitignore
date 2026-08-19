@@ -18,3 +18,8 @@ data/oc22/is2res_total_train_val_test_lmdbs/
 runs/
 *.traj
 *.log
+
+# Local model checkpoints (56 MB-2+ GB each); backends.py's MODEL_DIR default points here.
+# Re-stage per-model: MACE/Orb from their own public URLs, UMA/UMA-M are HF-gated (accept
+# the FAIR Chemistry License, download by hand).
+models/

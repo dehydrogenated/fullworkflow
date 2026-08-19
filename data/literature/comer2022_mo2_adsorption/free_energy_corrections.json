@@ -1,0 +1,10 @@
+{
+  "_source": "Comer et al. 2022, SI Table S2 -- eV, from vibrational frequency calculations",
+  "_note": "Not applied to the ΔE_ads / ΔG_ads columns in adsorption_energies.csv (those are the paper's main-text raw DFT ΔE_ads and its already-corrected ΔG_ads). These are provided separately for anyone re-deriving ΔG from a raw ΔE using ΔG = ΔE + ZPE + Hvib - TΔS.",
+  "species": {
+    "H2O": {"ZPE": 0.560, "Hvib": 0.103, "TS": 0.675, "ZPE_plus_Hvib_minus_TS": -0.012},
+    "H2":  {"ZPE": 0.268, "Hvib": 0.091, "TS": 0.408, "ZPE_plus_Hvib_minus_TS": -0.049},
+    "O*":  {"ZPE": 0.065, "Hvib": 0.038, "TS": 0.080, "ZPE_plus_Hvib_minus_TS": 0.023},
+    "OH*": {"ZPE": 0.344, "Hvib": 0.051, "TS": 0.085, "ZPE_plus_Hvib_minus_TS": 0.310}
+  }
+}

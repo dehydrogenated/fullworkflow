@@ -1,0 +1,79 @@
+#!/bin/bash
+#SBATCH --account=st-akkiraju-1
+#SBATCH --partition=cascade
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=32G
+#SBATCH --time=2:00:00
+#SBATCH --job-name=mo2-pilot
+#SBATCH --output=slurm-%j.out
+#SBATCH --error=slurm-%j.err
+#
+# O*/OH* adsorption vs. Comer et al. 2022 (JPCC 126, 7903) -- generalization test on a
+# brand-new oxide (FeO2, never touched locally) plus TiO2 as a known-good control, both
+# facets, Orb-v2 only (fastest model, per prior timing measurements on this repo's own
+# runs/ovfe_tio2_benchmark logs). Verifies the facet-dependent OH seed orientation fix
+# (scripts/ClaudeScripts/mo2_adsorption_benchmark.py's OH_COORDS_BY_FACET) generalizes
+# beyond the two oxides it was derived from. Submit from /scratch:
+#
+#   cd /scratch/st-akkiraju-1/$USER
+#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_mo2_pilot.slurm
+#
+# IMPORTANT -- run this ONCE on the LOGIN node first, before ever submitting this job.
+# Orb-v2's weights are fetched+cached on first use (unlike MACE/UMA, which load from a
+# pre-staged checkpoint file) -- compute nodes have no outbound network, so an uncached
+# Orb-v2 job will hang until the walltime runs out instead of failing fast:
+#
+#   conda activate oxw   # or: source $PROJECT/miniforge3/etc/profile.d/conda.sh && conda activate orb
+#   python -c "from orb_models.forcefield.pretrained import orb_v2; orb_v2()"
+
+set -euo pipefail
+
+PROJECT=/arc/project/st-akkiraju-1/ssong18
+REPO="$PROJECT/fullworkflow"
+
+export OXW_CONDA_BASE="$PROJECT/miniforge3"
+export OXW_MODEL_DIR="$PROJECT/models"
+
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export MKL_NUM_THREADS="$OMP_NUM_THREADS"
+
+if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+    export OXW_DEVICE=cuda
+else
+    export OXW_DEVICE=cpu
+fi
+
+export XDG_CACHE_HOME="${OXW_CACHE:-$SLURM_SUBMIT_DIR/.cache}"
+export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
+export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
+export HF_HOME="$XDG_CACHE_HOME/huggingface"
+export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
+export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
+mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
+         "$FAIRCHEM_CACHE_DIR"
+
+source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
+conda activate oxw
+
+cd "$SLURM_SUBMIT_DIR"
+
+echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
+
+OUT="$SLURM_SUBMIT_DIR/runs/mo2_pilot_sockeye"
+# Extra sbatch args after the script path forward straight through, e.g.:
+#   sbatch sockeye_mo2_pilot.slurm --oxides FeO2
+python "$REPO/scripts/ClaudeScripts/mo2_adsorption_benchmark.py" "$OUT" \
+    --oxides TiO2 FeO2 --facets 110 100 --adsorbates O OH --models Orb-v2 --fmax 0.02 "$@"
+
+echo
+echo "results in scratch: $OUT/results.jsonl"
+echo "to keep them, run this on the LOGIN node (scratch is purged on a timer):"
+D="$PROJECT/runs/$(date +%Y%m%d-%H%M%S)_mo2_pilot_sockeye"
+echo "    mkdir -p $D && rsync -a $OUT/ $D/ && cp $SLURM_SUBMIT_DIR/slurm-${SLURM_JOB_ID}.{out,err} $D/"
+echo "then pull it to your laptop with:"
+echo "    scripts/sync_sockeye_runs.sh $(basename "$D")"

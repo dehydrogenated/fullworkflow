@@ -18,30 +18,36 @@ pytest tests/test_pipeline.py
 pytest tests/test_pipeline.py::test_run_smoke -s
 
 # Fetch a structure from Materials Project (requires mp-api)
-python scripts/fetch_structure.py mp-2657
+python scripts/core/fetch_structure.py mp-2657
 
 # Fetch all rutile structures at once
-python scripts/fetch_rutiles.py
+python scripts/core/fetch_rutiles.py
 
 # Check which slab terminations exist for a material
-python scripts/validate_materials.py
+python scripts/core/validate_materials.py
 
 # Run a single pipeline stage (fastest iteration loop)
-python scripts/run_stage.py bulk
-python scripts/run_stage.py slab --thickness 20 --freeze 0.8
-python scripts/run_stage.py vacancy --from runs/practice/slab/CONTCAR
-python scripts/run_stage.py adsorbate --from runs/xyz/vacancy/site4_8d/CONTCAR --adsorbate O2
+python scripts/core/run_stage.py bulk
+python scripts/core/run_stage.py slab --thickness 20 --freeze 0.8
+python scripts/core/run_stage.py vacancy --from runs/practice/slab/CONTCAR
+python scripts/core/run_stage.py adsorbate --from runs/xyz/vacancy/site4_8d/CONTCAR --adsorbate O2
 
 # Full benchmark: one candidate vs. reference
 python -m oxide_workflow.pipeline --material mp-2657 --protocol full_pipeline
 
 # Sweep all rutile family members
-python scripts/run_family.py --dry-run          # plan + cost estimate
-python scripts/run_family.py --adsorbate O2 --cap 6
+python scripts/core/run_family.py --dry-run          # plan + cost estimate
+python scripts/core/run_family.py --adsorbate O2 --cap 6
 
 # Report results from a completed run
-python scripts/report.py runs/latest
+python scripts/core/report.py runs/latest
 ```
+
+### Script layout
+
+- `scripts/core/` — the tools above: fetching structures, running stages, reporting. Stable, documented entry points.
+- `scripts/ClaudeScripts/` — one-off benchmarks, probes, and reports built for specific investigations (not part of the documented workflow; may assume a particular run already exists).
+- `scripts/slurm/` — Sockeye job scripts (`.sh`/`.slurm`, submitted via `sbatch`) plus `sync_sockeye_runs.sh`, which pulls results back to this laptop and is the one script here that isn't itself a submitted job.
 
 ## Architecture
 
@@ -61,7 +67,7 @@ The workflow benchmarks MLIP models against a reference model on oxide surfaces.
 - **`config.py`** — all chemistry/relaxation knobs as frozen dataclasses (`RunConfig`, `SlabConfig`, `RelaxConfig`, `AdsorbateConfig`). Edit defaults here; CLI flags override per-run. `ADSORBATE_FRAGMENTS` defines named molecule geometries.
 - **`backends.py`** — the `Backend` dataclass and `relax()` function. Models run in isolated conda envs; the orchestrator writes a POSCAR + job spec, launches `worker_relax.py` in the model's env via subprocess, and reads the result back from disk. Model checkpoints are at `~/Desktop/mace_test/models/`. `REGISTRY` maps model names to backends; `ALL_CANDIDATES` is a convenience tuple of non-reference models.
 - **`stages.py`** — structure building only (no relaxation). `make_slab()` cuts the slab; `oxygen_vacancy_candidates()` and `adsorbate_candidates()` return lists of unrelaxed `Candidate` objects with a `site_id` dict for identification.
-- **`structures.py`** — resolves a material identifier (mp-id or path) to a `Structure`. mp-ids are read from `data/structures/` as CIF+JSON pairs saved by `scripts/fetch_structure.py`; a path is read and normalized directly, no registry involved.
+- **`structures.py`** — resolves a material identifier (mp-id or path) to a `Structure`. mp-ids are read from `data/structures/` as CIF+JSON pairs saved by `scripts/core/fetch_structure.py`; a path is read and normalized directly, no registry involved.
 - **`energetics.py`** — `adsorption_energy()`, `vacancy_formation_energy()`, `gas_reference_energy()`, `oxygen_chemical_potential()`. All energetics use same-calculator terms to cancel per-atom offsets.
 - **`diverge.py`** — computes displacement statistics (mean/rmsd/max) between two relaxed structures via `StructureMatcher`, plus `energy_error`.
 - **`records.py`** — writes the output file tree: POSCAR/CONTCAR/trajectory.xyz/OUTCAR per relaxation leaf, `rankings.csv` per funnel, `header.json` rollups, `divergence.jsonl`, `candidates.jsonl`, `summary.json`.
@@ -125,14 +131,14 @@ Watch out: the home-ish project dir and the scratch dir both end in `ssong18` as
 
 ```bash
 cd /scratch/st-akkiraju-1/$USER
-sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/<job>.slurm
+sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/<job>.slurm
 ```
 
 CPU is the `#SBATCH` default in every job script (`--account=st-akkiraju-1`, `--partition=cascade`). GPU needs a **different account** (the `-gpu` suffix) and explicit flags at submission time — command-line flags beat a script's `#SBATCH` defaults, so no editing is needed to switch:
 
 ```bash
 sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=6:00:00 \
-       /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/<job>.slurm
+       /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/<job>.slurm
 ```
 
 ### Monitoring / canceling

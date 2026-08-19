@@ -114,7 +114,7 @@ for S in "${SEEDSETS[@]}"; do
     for M in "${MODELS[@]}"; do
         echo
         echo "================ $S / $M ================"
-        if python "$REPO/scripts/oc22_diverge.py" --model "$M" \
+        if python "$REPO/scripts/ClaudeScripts/oc22_diverge.py" --model "$M" \
                   --seeds "$REPO/data/oc22/$S" --out "$OUT/$S/$M"; then
             echo "---- $S/$M ok"
         else

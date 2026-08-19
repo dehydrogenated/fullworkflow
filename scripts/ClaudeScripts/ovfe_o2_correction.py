@@ -47,7 +47,8 @@ from oxide_workflow.energetics import (
     oxygen_chemical_potential_corrected,
 )
 
-MODELS = ["MACE-mh1-omat", "MACE-mh1-oc20", "UMA-omat", "UMA-oc22", "CHGNet-0.3.0", "Orb-v2"]
+MODELS = ["MACE-mh1-omat", "MACE-mh1-oc20", "UMA-omat", "UMA-oc22", "CHGNet-0.3.0", "Orb-v2",
+          "SevenNet-omni-omat24"]
 SITES = {
     "O2c": {"lit": 3.02, "name": "bridging O (O2c)", "color": "#2a78d6"},
     "O3c": {"lit": 4.00, "name": "in-plane O (O3c)", "color": "#eb6834"},

@@ -13,8 +13,20 @@ corrected(), which adds the Kowalski O2-overbinding correction for a different p
 
 Standoff/fmax validated by a one-off local test (UMA-omat/TiO2/Ti5c, seed_standoff=0.5,
 fmax=0.02): converged in 84 real steps, final Ti-O = 1.637 A vs. literature PBE 1.716 A.
+That 0.5 A standoff is the default here and is reused for any --adsorbate; the literature
+columns (lit_e_ads_eV, lit_bond_A, lit_e_sigma) and the eq-2 water-splitting reference are
+specific to O and are only populated when --adsorbate O (the default) is used -- swapping
+in another fragment gets a plain isolated-fragment gas reference and blank literature
+columns instead of silently mislabeled O numbers.
 
     python scripts/o_adsorption_benchmark.py runs/o_ads_benchmark
+    python scripts/o_adsorption_benchmark.py runs/co_ads_benchmark --adsorbate CO
+
+Each run writes job.json (adsorbate, standoff, fmax, models, oxides) into outdir for
+provenance. Use a fresh outdir per adsorbate: results.jsonl is append-only, so rerunning
+into the same outdir with a different --adsorbate blends both into one file (each row is
+tagged with "adsorbate" so it stays interpretable) and job.json will only describe the
+most recent invocation.
 """
 
 from __future__ import annotations
@@ -79,7 +91,7 @@ def undercoordinated_metal_site(candidates):
     return min(metal_ontop, key=coord)
 
 
-def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> dict:
+def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig, adsorbate: str) -> dict:
     backend = get_backend(model)
     mp_id = OXIDES[oxide]["mp_id"]
     odir = outdir / oxide
@@ -102,13 +114,19 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> dict:
     pristine_energy = slab_out.energy
     pristine_structure = slab_out.structure
 
-    o_species, o_coords = ADSORBATE_FRAGMENTS["O"]
-    n_ads = len(o_species)
-    h2_species, h2_coords = ADSORBATE_FRAGMENTS["H2"]
-    h2o_species, h2o_coords = ADSORBATE_FRAGMENTS["H2O"]
-    e_h2 = gas_reference_energy(backend, cfg, pipeline.relax, species=h2_species, coords=h2_coords)
-    e_h2o = gas_reference_energy(backend, cfg, pipeline.relax, species=h2o_species, coords=h2o_coords)
-    e_o_ref = e_h2o - e_h2  # paper's eq 2 -- raw model energies, no added constant
+    ads_species, ads_coords = ADSORBATE_FRAGMENTS[adsorbate]
+    n_ads = len(ads_species)
+    if adsorbate == "O":
+        # Zhao & Kulik eq. 2: raw model energies, no added constant.
+        h2_species, h2_coords = ADSORBATE_FRAGMENTS["H2"]
+        h2o_species, h2o_coords = ADSORBATE_FRAGMENTS["H2O"]
+        e_h2 = gas_reference_energy(backend, cfg, pipeline.relax, species=h2_species, coords=h2_coords)
+        e_h2o = gas_reference_energy(backend, cfg, pipeline.relax, species=h2o_species, coords=h2o_coords)
+        e_ads_ref = e_h2o - e_h2
+    else:
+        # No paper-specific reaction reference for this fragment -- fall back to the
+        # plain isolated-fragment gas energy (cfg.adsorbate is already set to it).
+        e_ads_ref = gas_reference_energy(backend, cfg, pipeline.relax)
 
     candidates = adsorbate_candidates(
         pristine_structure, cfg.adsorbate, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
@@ -118,9 +136,12 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> dict:
     site_dir = odir / model / "adsorbate" / f"site{cand.site_id['site_index']}_{cand.site_id['symmetry_class']}"
 
     row = {
-        "model": model, "oxide": oxide, "site": cand.site_id["site_label"],
-        "lit_e_ads_eV": OXIDES[oxide]["lit_e_ads_eV"], "lit_e_sigma": OXIDES[oxide]["lit_e_sigma"],
-        "lit_bond_A": OXIDES[oxide]["lit_bond_A"],
+        "model": model, "oxide": oxide, "adsorbate": adsorbate, "site": cand.site_id["site_label"],
+        # Zhao & Kulik literature values are O-specific; blank for any other adsorbate
+        # rather than attaching O's numbers to a different fragment's row.
+        "lit_e_ads_eV": OXIDES[oxide]["lit_e_ads_eV"] if adsorbate == "O" else None,
+        "lit_e_sigma": OXIDES[oxide]["lit_e_sigma"] if adsorbate == "O" else None,
+        "lit_bond_A": OXIDES[oxide]["lit_bond_A"] if adsorbate == "O" else None,
     }
     try:
         res = relax(
@@ -138,7 +159,7 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> dict:
         print(f"    RELAX FAILED: {row['error'][:200]}", flush=True)
         return row
 
-    e_ads = adsorption_energy(res.energy, pristine_energy, e_o_ref)
+    e_ads = adsorption_energy(res.energy, pristine_energy, e_ads_ref)
     end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
     early_stopped = bool(res.meta.get("early_stopped_desorbing"))
     desorbed_final = (
@@ -155,37 +176,52 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig) -> dict:
         "converged": res.converged, "nsteps": res.nsteps,
     })
     status = "DESORBING" if desorbing else ("EXTENDED" if row["extended"] else "OK")
-    print(f"    E_ads={e_ads:+.4f} eV (lit {row['lit_e_ads_eV']:+.2f})  "
-          f"bond={end_dist:.3f} A (lit {row['lit_bond_A']:.3f})  {status}  "
+    lit_e_str = f"{row['lit_e_ads_eV']:+.2f}" if row["lit_e_ads_eV"] is not None else "n/a"
+    lit_bond_str = f"{row['lit_bond_A']:.3f}" if row["lit_bond_A"] is not None else "n/a"
+    print(f"    E_ads={e_ads:+.4f} eV (lit {lit_e_str})  "
+          f"bond={end_dist:.3f} A (lit {lit_bond_str})  {status}  "
           f"nsteps={res.nsteps}", flush=True)
     return row
 
 
-def main(outdir: Path, fmax: float, oxides: list[str] = None, models: list[str] = None) -> None:
+def main(
+    outdir: Path, fmax: float, oxides: list[str] = None, models: list[str] = None,
+    adsorbate: str = "O", seed_standoff: float = SEED_STANDOFF,
+) -> None:
     oxides = oxides or list(OXIDES)
     models = models or MODELS
-    o_species, o_coords = ADSORBATE_FRAGMENTS["O"]
+    ads_species, ads_coords = ADSORBATE_FRAGMENTS[adsorbate]
     cfg = RunConfig()
     cfg = replace(cfg, adsorbate=replace(
-        cfg.adsorbate, species=o_species, coords=o_coords,
-        positions=("ontop",), max_per_position=None, seed_standoff=SEED_STANDOFF,
+        cfg.adsorbate, species=ads_species, coords=ads_coords,
+        positions=("ontop",), max_per_position=None, seed_standoff=seed_standoff,
     ))
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=fmax))
     outdir.mkdir(parents=True, exist_ok=True)
     results_path = outdir / "results.jsonl"
 
+    job_path = outdir / "job.json"
+    job_path.write_text(json.dumps({
+        "adsorbate": adsorbate, "seed_standoff": seed_standoff, "fmax": fmax,
+        "positions": list(cfg.adsorbate.positions), "oxides": oxides, "models": models,
+        "e_ads_reference": (
+            "Zhao & Kulik eq. 2 (E(H2O) - E(H2), raw model energies)" if adsorbate == "O"
+            else "isolated-fragment gas reference (gas_reference_energy)"
+        ),
+    }, indent=2))
+
     pair_failures: list[tuple[str, str, str]] = []
     for model in models:
         for oxide in oxides:
             try:
-                row = run_one(model, oxide, outdir, cfg)
+                row = run_one(model, oxide, outdir, cfg, adsorbate)
             except Exception as e:
                 print(f"  [{model} / {oxide}] PAIR FAILED before relax: {e}", flush=True)
                 pair_failures.append((model, oxide, str(e)[:500]))
                 row = {
-                    "model": model, "oxide": oxide, "site": None, "failed": True,
-                    "error": f"pair-level: {e}"[:500], "e_ads_eV": None, "bond_A": None,
-                    "desorbing": None, "converged": None, "nsteps": None,
+                    "model": model, "oxide": oxide, "adsorbate": adsorbate, "site": None,
+                    "failed": True, "error": f"pair-level: {e}"[:500], "e_ads_eV": None,
+                    "bond_A": None, "desorbing": None, "converged": None, "nsteps": None,
                 }
             with results_path.open("a") as f:
                 f.write(json.dumps(row) + "\n")
@@ -203,5 +239,7 @@ if __name__ == "__main__":
     ap.add_argument("--fmax", type=float, default=0.02)
     ap.add_argument("--oxides", nargs="+", choices=ALL_OXIDES, default=list(ALL_OXIDES))
     ap.add_argument("--models", nargs="+", choices=MODELS + EXTRA_MODELS, default=MODELS)
+    ap.add_argument("--adsorbate", choices=list(ADSORBATE_FRAGMENTS), default="O")
+    ap.add_argument("--seed-standoff", type=float, default=SEED_STANDOFF)
     a = ap.parse_args()
-    main(a.outdir, a.fmax, a.oxides, a.models)
+    main(a.outdir, a.fmax, a.oxides, a.models, a.adsorbate, a.seed_standoff)

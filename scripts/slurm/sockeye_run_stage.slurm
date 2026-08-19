@@ -16,11 +16,11 @@
 # with an explicit --outdir per model so parallel submissions don't collide:
 #
 #   cd /scratch/st-akkiraju-1/$USER
-#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_run_stage.slurm \
+#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_run_stage.slurm \
 #          vacancy --model UMA-M-omat --outdir runs/ovfe_uma_m_omat
 #
 #   sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=0:30:00 \
-#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_run_stage.slurm \
+#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_run_stage.slurm \
 #          vacancy --model UMA-M-oc20 --outdir runs/ovfe_uma_m_oc20
 
 set -euo pipefail
@@ -67,7 +67,7 @@ test -f "$OXW_MODEL_DIR/uma-m-1p1.pt" || echo "note: uma-m-1p1.pt not staged (ne
 
 # Everything after the script path forwards straight to run_stage.py -- stage, --model,
 # --outdir, and any geometry/relax overrides, exactly like running it locally.
-python "$REPO/scripts/run_stage.py" "$@"
+python "$REPO/scripts/core/run_stage.py" "$@"
 
 echo
 echo "results in scratch under the --outdir you passed above"

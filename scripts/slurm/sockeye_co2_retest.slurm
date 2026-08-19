@@ -11,7 +11,7 @@
 #SBATCH --error=slurm-%j.err
 #
 # CO2 adsorption retest (5 azimuthal orientations + larger standoff + early-stop desorb
-# check) across the rutile family — see scripts/co2_adsorption_retest.py for the rationale.
+# check) across the rutile family — see scripts/ClaudeScripts/co2_adsorption_retest.py for the rationale.
 #
 # Same environment contract as sockeye_job.sh (read that one first if anything here is
 # surprising) — reused directly rather than re-derived, since it's already the
@@ -21,10 +21,10 @@
 #     submission time — command-line flags beat the #SBATCH defaults above:
 #
 #     cd /scratch/st-akkiraju-1/$USER
-#     sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_co2_retest.slurm
+#     sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_co2_retest.slurm
 #
 #     sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=6:00:00 \
-#            /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_co2_retest.slurm
+#            /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_co2_retest.slurm
 #
 # 180 relaxations (3 sites x 6 orientations x 5 oxides x 2 models), early-stop pruning the
 # doomed ones at step 100 instead of running to 300 — GPU strongly recommended over cascade.
@@ -93,7 +93,7 @@ OUT="$SLURM_SUBMIT_DIR/runs/co2_ads_benchmark"
 # logic picks them up for free and only the (standoff/orientation-affected) adsorbate stage
 # actually reruns. Nothing breaks if they aren't there — it just relaxes bulk/slab fresh.
 STATUS=0
-python "$REPO/scripts/co2_adsorption_retest.py" "$OUT" --fmax 0.02 --oxides TiO2 || STATUS=$?
+python "$REPO/scripts/ClaudeScripts/co2_adsorption_retest.py" "$OUT" --fmax 0.02 --oxides TiO2 || STATUS=$?
 
 echo
 echo "results in scratch: $OUT/results_retest.jsonl"

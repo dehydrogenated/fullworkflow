@@ -21,7 +21,7 @@ RUTILE IDENTIFICATION — two disjoint families, found two different ways.
 1. Binary MO2 (``kind="binary"``). Composition does not imply structure type: OC22
    carries SnO2 as I4_1/amd, Pnnm and Pbcn, and its only pure TiO2 bulk (mp-554278) is
    C2/m. So these are matched on ``bulk_id`` against mp-ids that were resolved by
-   *spacegroup* query (P4_2/mnm, #136) in ``scripts/fetch_rutiles.py``. That check
+   *spacegroup* query (P4_2/mnm, #136) in ``scripts/core/fetch_rutiles.py``. That check
    already ran and is recorded in each file's ``query`` field, so no MP key is needed.
    Verified against MP's OPTIMADE endpoint: every MO2 bulk OC22 uses that is NOT in
    this set is genuinely a different polymorph, so the filter has no false negatives.
@@ -224,7 +224,7 @@ def main() -> None:
     mp_rutiles = rutile_mp_ids()
     if not mp_rutiles:
         raise SystemExit(f"no spacegroup-{RUTILE_SPACEGROUP} structures in {STRUCTURES}; "
-                         "run scripts/fetch_rutiles.py first")
+                         "run scripts/core/fetch_rutiles.py first")
     print(f"loaded {len(meta)} OC22 systems")
     subset = classify(meta, mp_rutiles)
     full = subset

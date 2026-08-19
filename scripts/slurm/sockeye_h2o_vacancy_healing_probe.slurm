@@ -20,10 +20,10 @@
 # history for the periodic-boundary bug that test caught and fixed. Submit from /scratch:
 #
 #   cd /scratch/st-akkiraju-1/$USER
-#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_h2o_vacancy_healing_probe.slurm
+#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_h2o_vacancy_healing_probe.slurm
 #
 #   sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=1:30:00 \
-#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_h2o_vacancy_healing_probe.slurm
+#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_h2o_vacancy_healing_probe.slurm
 #
 # UMA-M-omat needs uma-m-1p1.pt staged in $OXW_MODEL_DIR by hand (gated on HuggingFace,
 # not auto-fetchable -- see backends.py's UMA_M_CKPT comment) -- a DIFFERENT checkpoint
@@ -98,7 +98,7 @@ OUT="$SLURM_SUBMIT_DIR/runs/h2o_vacancy_healing_probe"
 # rerun. Nothing breaks if they aren't there -- it just relaxes bulk/slab fresh.
 # --models hardcoded to just UMA-M-omat; "$@" still lets it be overridden.
 STATUS=0
-python "$REPO/scripts/h2o_vacancy_healing_probe.py" "$OUT" --models UMA-M-omat "$@" \
+python "$REPO/scripts/ClaudeScripts/h2o_vacancy_healing_probe.py" "$OUT" --models UMA-M-omat "$@" \
     || STATUS=$?
 
 echo

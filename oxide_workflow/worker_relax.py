@@ -63,8 +63,15 @@ def build_calculator(spec: dict):
 
         # model_path doubles as the pretrained-checkpoint function name (e.g.
         # "orb_v2"); weights download once from Orbital Materials' S3 bucket and
-        # are cached locally by cached_path after that.
-        orbff = getattr(pretrained, spec["model_path"])(device=spec.get("device", "cpu"))
+        # are cached locally by cached_path after that -- unless checkpoint_path
+        # points at an already-staged local file (needed offline, e.g. a Sockeye
+        # compute node with no outbound network), in which case load from that
+        # directly instead of ever touching the network.
+        kwargs = {"device": spec.get("device", "cpu")}
+        ckpt = spec.get("checkpoint_path")
+        if ckpt and Path(ckpt).exists():
+            kwargs["weights_path"] = ckpt
+        orbff = getattr(pretrained, spec["model_path"])(**kwargs)
         return ORBCalculator(orbff, device=spec.get("device", "cpu"))
     if loader == "sevenn":
         from sevenn.calculator import SevenNetCalculator

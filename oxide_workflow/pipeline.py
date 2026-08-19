@@ -65,11 +65,11 @@ Worked examples
 
 Reading the result
 ------------------
-    python scripts/report.py runs/rutile_O2/mp-825     # one run, per-stage detail
-    python scripts/report.py runs/rutile_O2            # a directory of runs, compared
+    python scripts/core/report.py runs/rutile_O2/mp-825     # one run, per-stage detail
+    python scripts/core/report.py runs/rutile_O2            # a directory of runs, compared
 
-Related entry points: ``scripts/run_stage.py`` runs a single stage (and can start from a
-structure file, skipping everything before it); ``scripts/run_family.py`` wraps
+Related entry points: ``scripts/core/run_stage.py`` runs a single stage (and can start from a
+structure file, skipping everything before it); ``scripts/core/run_family.py`` wraps
 ``run_batch`` for unattended multi-material sweeps with cost estimates and resume.
 
 What it does
@@ -1320,7 +1320,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--termination", type=int,
         help=f"which termination of the facet (default {_slab.termination_index}). "
-             "Run scripts/validate_materials.py to see what each index actually is.",
+             "Run scripts/core/validate_materials.py to see what each index actually is.",
     )
     parser.add_argument(
         "--thickness", type=float, metavar="A",

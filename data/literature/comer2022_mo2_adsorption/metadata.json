@@ -1,0 +1,20 @@
+{
+  "citation": "Comer, B. M.; Li, J.; Abild-Pedersen, F.; Bajdich, M.; Winther, K. T. Unraveling Electronic Trends in O* and OH* Surface Adsorption in the MO2 Transition-Metal Oxide Series. J. Phys. Chem. C 2022, 126, 7903-7909.",
+  "doi": "10.1021/acs.jpcc.2c02381",
+  "external_data": "https://www.catalysis-hub.org/publications/ComerUnraveling2022",
+  "system": "33 MO2 rutile transition-metal oxides (3d, 4d, 5d), +4 oxidation state, (110) CUS-site and (100) top-site adsorption, 1x1 high-coverage cells",
+  "method": "VASP, PBE+U (3d metals only, see hubbard_u.json; 4d/5d at plain PBE), 500 eV cutoff, 8x4x1 k-points, fmax=0.02 eV/A (0.07 eV/A for O*/CdO2(100))",
+  "reference_state": "DeltaE/G referenced to gas-phase H2O and H2: H2O(g) - H2(g) + * -> O*,  H2O(g) - 0.5 H2(g) + * -> OH*",
+  "files": {
+    "adsorption_energies.csv": "Table S3 -- all 132 rows (33 metals x 2 facets x {O,OH}), raw DeltaE_ads and ZPE/TS-corrected DeltaG_ads, eV",
+    "hubbard_u.json": "Table S1 -- U values applied to the 3d metals",
+    "free_energy_corrections.json": "Table S2 -- ZPE/Hvib/TS corrections used to go from DeltaE to DeltaG",
+    "jp2c02381.pdf": "main text -- NOT YET SAVED, drop the file in this folder",
+    "jp2c02381_si_001.pdf": "Supporting Information -- NOT YET SAVED, drop the file in this folder"
+  },
+  "caveats": [
+    "Magnetic structure is constrained: empty*, OH*, and O* surfaces are forced to share the same magnetic configuration (SI Fig. S1) -- an MLIP comparison has no spin state at all, so this is a real methodological gap, not just a numerical one, for the early-3d high-spin metals (V, Cr, Mn, Fe).",
+    "CdO2(100)/O* was relaxed to a looser 0.07 eV/A instead of the paper's usual 0.02 eV/A -- flagged in case a tight-fmax MLIP comparison lands suspiciously off for that one row.",
+    "This repo's rutile TiO2(110) benchmark already uses seed_standoff=0.5 (see scripts/o_adsorption_benchmark.py); this paper's TiO2(110) O* value (4.55 eV) is a second, independent literature point for that same oxide/facet, distinct from the Zhao & Kulik 2019 value (4.43 eV) already wired into OXIDES in that script."
+  ]
+}

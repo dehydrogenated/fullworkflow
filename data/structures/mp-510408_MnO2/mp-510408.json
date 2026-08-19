@@ -1,0 +1,15 @@
+{
+  "identifier": "mp-510408",
+  "source": "materials-project",
+  "query": "formula=MnO2 spacegroup_number=136",
+  "energy_above_hull": 0.04644304472222238,
+  "is_stable": false,
+  "theoretical": false,
+  "family": "rutile",
+  "note": "",
+  "mp_database_version": "2026.04.13",
+  "added_utc": "2026-08-19T21:50:58+00:00",
+  "formula": "MnO2",
+  "n_sites": 6,
+  "spacegroup": "P4_2/mnm"
+}

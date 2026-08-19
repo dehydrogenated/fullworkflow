@@ -23,7 +23,7 @@
 # elsewhere in this repo -- Sockeye rejects --gres=gpu otherwise). Submit from /scratch:
 #
 #   cd /scratch/st-akkiraju-1/$USER
-#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/sockeye_h2o_dissociation_probe.slurm
+#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_h2o_dissociation_probe.slurm
 #
 # Extra sbatch args after the script path forward straight through, e.g. to add models
 # back in (both would then need a CUDA-built torch in their own conda env too):
@@ -91,7 +91,7 @@ OUT="$SLURM_SUBMIT_DIR/runs/h2o_dissociation_probe"
 # Nothing breaks if they aren't there -- it just relaxes bulk/slab fresh. --models
 # hardcoded to just SevenNet; "$@" still lets it be overridden at submission time.
 STATUS=0
-python "$REPO/scripts/h2o_dissociation_probe.py" "$OUT" --models SevenNet-omni-omat24 "$@" \
+python "$REPO/scripts/ClaudeScripts/h2o_dissociation_probe.py" "$OUT" --models SevenNet-omni-omat24 "$@" \
     || STATUS=$?
 
 echo

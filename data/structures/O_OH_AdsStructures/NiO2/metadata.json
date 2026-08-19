@@ -1,0 +1,14 @@
+{
+  "formula": "NiO2",
+  "source": "Comer et al. 2022 data release",
+  "source_url": "https://raw.githubusercontent.com/bencomer/ComerUnraveling2022/master/bulks/06_NiO2/final_with_calculator.json",
+  "citation_doi": "10.1021/acs.jpcc.2c02381",
+  "spacegroup_number": 136,
+  "spacegroup_symbol": "P4_2/mnm",
+  "n_sites": 6,
+  "energy_eV": -26.91300256,
+  "vasp_encut": 600,
+  "vasp_gga": "PE",
+  "vasp_ispin": 2,
+  "vasp_ldau": true
+}

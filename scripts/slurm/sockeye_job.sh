@@ -23,7 +23,7 @@
 # so the script itself stays in the repo and is named by absolute path:
 #
 #     cd /scratch/st-akkiraju-1/$USER
-#     sbatch /arc/project/st-akkiraju-1/$USER/fullworkflow/scripts/sockeye_job.sh
+#     sbatch /arc/project/st-akkiraju-1/$USER/fullworkflow/scripts/slurm/sockeye_job.sh
 #     sbatch /arc/.../sockeye_job.sh --material mp-825 --protocol seeded
 #
 # Anything after the script name is forwarded to the pipeline verbatim. The package is
