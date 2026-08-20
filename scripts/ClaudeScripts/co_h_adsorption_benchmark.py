@@ -1,34 +1,54 @@
-"""CO and H adsorption on rutile TiO2(110) vs. Andriuc, Siron & Persson (Surface Science
-758, 2025, 122745), RPBE+D3.
+"""CO and H adsorption vs. two independent literature sources, single site per pair.
 
-Single site only: C-down for CO (perpendicular to the surface), monoatomic for H, both
-ontop the most undercoordinated surface Ti -- the paper's own placement (Delaunay
-triangulation + adsorbate-surface distance optimization, same lineage this repo's own
-site-finder descends from, both via Montoya & Persson 2017) actually searches every site
-type and keeps the best; this script deliberately narrows to the single Ti5c site already
-used everywhere else in this repo (Zhao & Kulik's O*, Comer's O*/OH*), not a full
-site-search replication -- a smoke test that things adsorb at all, not a site-fidelity study.
+TiO2(110): vs. Andriuc, Siron & Persson (Surface Science 758, 2025, 122745), RPBE+D3,
+fmax=0.05 eV/A, minimum-dimension slab (12 A vacuum, 7 A min height, 10 A min lateral).
+IrO2(110): vs. Pope, Yun et al. (Surface Science 751, 2025, 122619), plain PBE (no
+dispersion correction), fmax=0.03 eV/A, explicit 4x2 supercell, 4 layers (~12 A thick),
+25 A vacuum, bottom 2 layers fixed. Different functional, different fmax, different slab
+convention between the two papers -- noted here rather than reconciled, since our own
+compute settings (fmax=0.01, seed_standoff=0.5) stay fixed across both oxides regardless
+of what each paper individually used. Both papers agree on the site type that matters for
+CO though: ontop the single most undercoordinated surface metal cation (Ti5c / Ircus) --
+on IrO2(110)'s *stoichiometric* surface specifically, this isn't just the preferred site,
+it's the only one physically available at all (no O-vacancy for a bridging site to exist
+on a pristine slab), so this script's existing single-metal-site convention is exactly
+right for IrO2/CO, not a simplification the way it is for TiO2.
+
+H is placed differently from CO: ontop the bridging O2c site, not the metal cation.
+Andriuc et al.'s own finding (Section 3: "the shortest H-surface distances, corresponding
+to chemisorption, occur *exclusively* in cases in which H is closest to a surface O
+site") -- placing H on the metal cation the same way CO is placed gave every model a
+consistent positive (unfavorable) E_ads, which is real chemistry (H correctly doesn't
+want the metal site) but not comparable to any literature number, since the paper's own
+best H site is O, not Ti. IrO2 doesn't get an H row here (not requested, and the Pope et
+al. paper doesn't study H at all -- it's a CO oxidation paper).
 
 seed_standoff=0.5, not looser: a prior local probe (runs/COtest_july29/) pushed CO in
 tighter than this (Ti-C ~2.2 A) and the relaxation pushed it straight back out to ~4 A
 instead of settling into a stronger bound state -- a real, observed failure mode, not a
-hypothetical one. 0.5 is also o_adsorption_benchmark.py's own validated default, reused
-here for consistency.
+hypothetical one. 0.5 is also o_adsorption_benchmark.py's own validated default.
 
 Reference: CO -- DeltaE_ads = E(CO*) - E(*) - E(CO, gas), its own relaxed gas energy
-directly (no derived formula). H -- DeltaE_ads = E(H*) - E(*) - 0.5*E(H2, gas), the
-paper's own eq. 1 (half of the H2 gas energy, not an isolated single H atom's own DFT
-energy -- deliberately avoids the spin/multiplicity awkwardness of computing an isolated
-unpaired H directly, same convention already used for O*/OH* in mo2_adsorption_benchmark.py).
+directly. H -- DeltaE_ads = E(H*) - E(*) - 0.5*E(H2, gas), Andriuc et al.'s eq. 1 (half of
+H2's gas energy, not an isolated single H atom's own DFT energy -- avoids the
+spin/multiplicity awkwardness of an isolated unpaired H, same convention already used for
+O*/OH* in mo2_adsorption_benchmark.py).
 
-Literature: CO on rutile TiO2(110) = -0.42 eV (RPBE+D3), cross-validated by the paper
-itself against thermal desorption experiments at -0.43 eV (Linsebigler et al. 1995) -- a
-real, weak-binding system, so a small negative E_ads here is a correct result, not a
-failure. The paper does not tabulate a TiO2(110)-specific H value in the text (only in
-Fig. 3's scatter, not as a number) -- H's lit_e_ads_eV is left None rather than eyeballing
-a plot.
+Literature values:
+- TiO2(110) CO = -0.42 eV (RPBE+D3), cross-validated by Andriuc et al. against thermal
+  desorption experiments at -0.43 eV (Linsebigler et al. 1995) -- genuinely weak binding,
+  so a small negative E_ads is a correct result, not a failure.
+- TiO2(110) H: not tabulated as a number anywhere in the paper's text (only in a Fig. 3
+  scatter plot) -- left None rather than eyeballed.
+- IrO2(110) CO = -2.311 eV (223 kJ/mol desorption energy, PBE, converted and sign-flipped
+  to this repo's E_ads convention: their Ed = -(our E_ads)). The paper itself flags PBE as
+  likely overestimating this -- single-point HSE06 gives 216 kJ/mol (-2.239 eV), and their
+  own TPRS-based kinetic estimate puts the *true* binding energy closer to 170-190 kJ/mol
+  (-1.76 to -1.97 eV). -2.311 eV is recorded as the primary comparison point since it's
+  the paper's own directly-computed DFT number, with the corrected range as context.
 
     python scripts/ClaudeScripts/co_h_adsorption_benchmark.py runs/co_h_ads_benchmark
+    python scripts/ClaudeScripts/co_h_adsorption_benchmark.py runs/co_h_ads_benchmark --oxides IrO2
 """
 
 from __future__ import annotations
@@ -47,10 +67,28 @@ from oxide_workflow.pipeline import _adsorbate_anchor_distance
 from oxide_workflow.stages import adsorbate_candidates, make_slab
 from oxide_workflow.structures import get_structure
 
-OXIDES = {"TiO2": "mp-2657"}
-ADSORBATES = {
-    "CO": {"lit_e_ads_eV": -0.42, "lit_source": "Andriuc et al. 2025, RPBE+D3, TiO2(110)"},
-    "H": {"lit_e_ads_eV": None, "lit_source": "not tabulated for TiO2(110) in the paper's text"},
+KJ_PER_MOL_TO_EV = 96.485
+
+OXIDES = {
+    "TiO2": {
+        "mp_id": "mp-2657",
+        "adsorbates": {
+            "CO": {"lit_e_ads_eV": -0.42, "lit_source": "Andriuc et al. 2025, RPBE+D3, TiO2(110)"},
+            "H": {"lit_e_ads_eV": None, "lit_source": "not tabulated for TiO2(110) in the paper's text"},
+        },
+    },
+    "IrO2": {
+        "mp_id": "mp-2723",
+        "adsorbates": {
+            "CO": {
+                "lit_e_ads_eV": -223 / KJ_PER_MOL_TO_EV,
+                "lit_source": "Pope, Yun et al. 2025, PBE (no dispersion), IrO2(110), COt on "
+                               "s-IrO2(110) -- paper itself flags PBE as an overestimate; "
+                               "HSE06 single-point = -2.239 eV, TPRS-inferred true value "
+                               "~-1.76 to -1.97 eV",
+            },
+        },
+    },
 }
 MODELS = ["MACE-mh1-omat", "UMA-omat", "UMA-oc22", "SevenNet-omni-omat24"]
 SEED_STANDOFF = 0.5  # see module docstring -- validated, don't push tighter
@@ -78,10 +116,29 @@ def undercoordinated_metal_site(candidates):
     return min(metal_ontop, key=coord)
 
 
+def undercoordinated_oxygen_site(candidates):
+    """The bridging O2c-equivalent ontop site -- H's real preferred site per Andriuc et
+    al.'s own finding (see module docstring), mirroring undercoordinated_metal_site()'s
+    logic but filtering for O-labeled sites instead of metal ones."""
+    oxygen_ontop = [
+        c for c in candidates
+        if c.site_id["symmetry_class"] == "ontop"
+        and c.site_id["site_label"] and c.site_id["site_label"].startswith("O")
+    ]
+    if not oxygen_ontop:
+        raise RuntimeError("no oxygen ontop site found")
+
+    def coord(c):
+        m = re.match(r"^[A-Za-z]+(\d+)c$", c.site_id["site_label"])
+        return int(m.group(1)) if m else 99
+
+    return min(oxygen_ontop, key=coord)
+
+
 def run_one(model: str, oxide: str, adsorbate: str, outdir: Path, cfg: RunConfig) -> dict:
     backend = get_backend(model)
-    mp_id = OXIDES[oxide]
-    info = ADSORBATES[adsorbate]
+    mp_id = OXIDES[oxide]["mp_id"]
+    info = OXIDES[oxide]["adsorbates"][adsorbate]
     odir = outdir / oxide / adsorbate / model
 
     def relax_record(structure, stage, source_desc, relax_cell=False):
@@ -119,7 +176,9 @@ def run_one(model: str, oxide: str, adsorbate: str, outdir: Path, cfg: RunConfig
                 positions=("ontop",), max_per_position=None, seed_standoff=SEED_STANDOFF),
         freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
     )
-    cand = undercoordinated_metal_site(candidates)
+    # H goes on the bridging O2c site (its real preferred site per Andriuc et al.);
+    # everything else (CO here) goes on the undercoordinated metal cation.
+    cand = undercoordinated_oxygen_site(candidates) if adsorbate == "H" else undercoordinated_metal_site(candidates)
 
     res = relax(
         cand.structure, backend, workdir=odir / "adsorbate",
@@ -156,13 +215,20 @@ def main(outdir: Path, oxides: list[str], adsorbates: list[str], models: list[st
     job_path.write_text(json.dumps({
         "oxides": oxides, "adsorbates": adsorbates, "models": models,
         "seed_standoff": SEED_STANDOFF, "fmax": fmax,
-        "e_ads_reference": "CO: E(CO,gas) direct; H: 0.5*E(H2,gas) -- Andriuc et al. 2025 eq. 1",
-        "literature_source": "Andriuc, Siron & Persson 2025, Surface Science 758, 122745",
+        "e_ads_reference": "CO: E(CO,gas) direct; H: 0.5*E(H2,gas)",
+        "literature_sources": {
+            "TiO2": "Andriuc, Siron & Persson 2025, Surface Science 758, 122745 (RPBE+D3)",
+            "IrO2": "Pope, Yun et al. 2025, Surface Science 751, 122619 (PBE, no dispersion)",
+        },
     }, indent=2))
 
     pair_failures: list[str] = []
+    skipped: list[str] = []
     for oxide in oxides:
         for adsorbate in adsorbates:
+            if adsorbate not in OXIDES[oxide]["adsorbates"]:
+                skipped.append(f"{oxide}/{adsorbate}")
+                continue
             for model in models:
                 tag = f"{oxide}/{adsorbate}/{model}"
                 try:
@@ -179,6 +245,8 @@ def main(outdir: Path, oxides: list[str], adsorbates: list[str], models: list[st
                     f.write(json.dumps(row) + "\n")
 
     print(f"\nwrote {results_path}")
+    if skipped:
+        print(f"\nskipped (adsorbate not defined for that oxide): {', '.join(skipped)}")
     if pair_failures:
         print(f"\n{len(pair_failures)} pair(s) failed:")
         for p in pair_failures:
@@ -189,7 +257,8 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("outdir", type=Path)
     ap.add_argument("--oxides", nargs="+", default=list(OXIDES), choices=list(OXIDES))
-    ap.add_argument("--adsorbates", nargs="+", default=list(ADSORBATES), choices=list(ADSORBATES))
+    ap.add_argument("--adsorbates", nargs="+", default=["CO", "H"], choices=["CO", "H"],
+                     help="a combo not defined for a given oxide (e.g. IrO2/H) is skipped, not an error")
     ap.add_argument("--models", nargs="+", default=MODELS)
     ap.add_argument("--fmax", type=float, default=FMAX)
     a = ap.parse_args()

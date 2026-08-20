@@ -6,16 +6,19 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=2:00:00
+#SBATCH --time=3:00:00
 #SBATCH --job-name=co-h-ads
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #
-# CO + H adsorption smoke test on rutile TiO2(110) vs. Andriuc, Siron & Persson 2025 --
-# see scripts/ClaudeScripts/co_h_adsorption_benchmark.py for the rationale. One relaxation
-# per (adsorbate, model), single site (Ti5c ontop), seed_standoff=0.5 deliberately not
-# tighter -- a prior local probe showed CO pushed in tighter relaxes straight back out to
-# ~4 A instead of binding. 4 models x 2 adsorbates x 1 oxide = 8 pairs, small and fast.
+# CO + H adsorption smoke test, TiO2(110) vs. Andriuc, Siron & Persson 2025 and IrO2(110)
+# CO vs. Pope, Yun et al. 2025 -- see scripts/ClaudeScripts/co_h_adsorption_benchmark.py
+# for the rationale and the settings differences between the two papers. One relaxation
+# per (oxide, adsorbate, model): CO ontop the undercoordinated metal cation (Ti5c/Ircus),
+# H ontop the bridging O2c site (its real preferred site per Andriuc et al.'s own
+# finding, not the metal). seed_standoff=0.5 deliberately not tighter -- a prior local
+# probe showed CO pushed in tighter relaxes straight back out to ~4 A instead of binding.
+# Default: 4 models x (TiO2 CO + TiO2 H + IrO2 CO) = 12 pairs, still small and fast.
 # Needs the -gpu account (a different allocation from the CPU jobs elsewhere in this repo
 # -- Sockeye rejects --gres=gpu otherwise). Submit from /scratch:
 #
@@ -23,7 +26,7 @@
 #   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_co_h_adsorption_benchmark.slurm
 #
 # Extra sbatch args after the script path forward straight through:
-#   sbatch sockeye_co_h_adsorption_benchmark.slurm --adsorbates CO
+#   sbatch sockeye_co_h_adsorption_benchmark.slurm --oxides IrO2 --adsorbates CO
 #   sbatch sockeye_co_h_adsorption_benchmark.slurm --models UMA-omat UMA-oc22
 
 set -euo pipefail
