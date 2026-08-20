@@ -10,17 +10,21 @@
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #
-# Full O*/OH* adsorption sweep vs. Comer et al. 2022 -- 5d-row oxides (Hf, Ta, W, Re, Os, Ir, Pt, Au, Hg, Tl, Pb), both facets, all 13 currently-accessible models spanning the
-# omat/oc20/oc22 training-data axis (generalist vs. catalysis-specialist comparison).
+# Full O*/OH* adsorption sweep vs. Comer et al. 2022 -- 5d-row oxides (Hf, Ta, W, Re, Os, Ir, Pt, Au, Hg, Tl, Pb), both facets, all 15 currently-accessible models spanning the
+# omat/oc20/oc22 training-data axis (generalist vs. catalysis-specialist comparison), plus
+# two deliberate outliers: MACE-mh1-matpes (r2SCAN, not PBE -- included to see whether a
+# different DFT functional systematically beats PBE-trained models against Comer's PBE+U
+# reference, not because it's apples-to-apples) and SevenNet-omni-mpa (MPtrj+Alexandria,
+# PBE -- a novel-dataset generalist head with no MACE/UMA equivalent on this axis).
 # Sibling jobs: sockeye_mo2_sweep_4d.slurm, sockeye_mo2_sweep_5d.slurm (paper's own row
 # split -- 11 oxides each, equally sized). eSEN-30M-OAM (30M, OMat24+sAlex+MPtrj -- current Matbench Discovery leaderboard
 # topper) runs in its own "esen" env, fairchem-core==1.10.0 -- its public checkpoint is
 # in fairchem's legacy format, which the "fairchem" env's current 2.x dropped support
 # for. See backends.py's ESEN_CKPT/_esen() comment for the full story.
 #
-# ~1144 relaxations this job alone (11 oxides x 2 facets x 13 models x (2 bulk/slab +
-# 2 adsorbate)) -- rough estimate 20-30h serial wall-clock from this session's own measured
-# per-relaxation times. results.jsonl is written one row at a time, so a walltime kill
+# ~1320 relaxations this job alone (11 oxides x 2 facets x 15 models x (2 bulk/slab +
+# 2 adsorbate)) -- rough estimate 23-35h serial wall-clock, scaled from this session's
+# own measured per-relaxation times. results.jsonl is written one row at a time, so a walltime kill
 # loses nothing already completed; just resubmit (a fresh outdir, or accept the append and
 # only rerun what's missing) to pick up the rest.
 #
@@ -81,10 +85,10 @@ done
 
 MODELS=(
     CHGNet-0.3.0 Orb-v2
-    MACE-mh1-omat MACE-mh1-oc20
+    MACE-mh1-omat MACE-mh1-oc20 MACE-mh1-matpes
     UMA-omat UMA-oc20 UMA-oc22
     UMA-M-omat UMA-M-oc20
-    SevenNet-omni-omat24 SevenNet-omni-oc20 SevenNet-omni-oc22
+    SevenNet-omni-omat24 SevenNet-omni-oc20 SevenNet-omni-oc22 SevenNet-omni-mpa
     eSEN-30M-OAM
 )
 OXIDES=(HfO2 TaO2 WO2 ReO2 OsO2 IrO2 PtO2 AuO2 HgO2 TlO2 PbO2)
