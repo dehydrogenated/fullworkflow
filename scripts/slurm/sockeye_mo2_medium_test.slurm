@@ -10,26 +10,36 @@
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #
-# Medium test, one step up from the individual per-model smoke tests (sockeye_chgnet_test,
-# sockeye_esen_test, the Orb-v2 pilot) -- those each proved one model runs at all; this
-# proves the pipeline is CORRECT after tonight's lattice-shear fix (stages.py's
-# _orthogonalize_inplane_lattice), at full fidelity (fmax=0.02, no shortcuts), across
-# multiple oxides. The shear SlabGenerator introduces is chemistry-dependent (tiny for
-# some bulk lattice constants, ~1.2 A for others -- see the commit this job is meant to
-# validate), so oxide diversity matters here more than model count: the fix lives in
-# make_slab(), shared by every model, so one model proving the geometry is clean already
-# validates it structurally -- CHGNet/Orb-v2/eSEN are included because those three had
-# separate deployment blockers fixed this session and haven't been run end-to-end together
-# since.
+# Medium test, one step up from the individual per-model smoke tests already run this
+# session (sockeye_chgnet_test, sockeye_esen_test, the Orb-v2 pilot). Those covered
+# CHGNet/Orb-v2/eSEN on TiO2/FeO2/CrO2; this deliberately covers the opposite corner --
+# every remaining model FAMILY that has never run through this benchmark script at all
+# (MACE, UMA-S, UMA-M, SevenNet), including both brand-new registry entries added tonight
+# (MACE-mh1-matpes, SevenNet-omni-mpa), on oxides this script has never touched either.
 #
-# TiO2 (known-good control) + CrO2 + FeO2, both facets, both adsorbates, 3 models ->
-# 3 oxides x 2 facets x 3 models = 18 bulk/slab pairs, x 2 adsorbates = 36 relaxation legs.
+# UMA-M-omat is the highest-risk untested item here: its checkpoint (uma-m-1p1.pt) is a
+# gated HF download with presence on Sockeye unconfirmed as of data/models.md, and it has a
+# known predictor-construction hang on some setups (fairchem#2095) that isn't a config
+# mistake if hit -- exactly the kind of thing worth finding out now, not 6h into a sweep job.
+#
+# ZrO2 is the only one of the 33 oxides with no Comer-sourced structure (their repo has no
+# final_with_calculator.json for it) -- it's the sole oxide that exercises the Materials
+# Project structure-fetch fallback in mp_id_for_formula() instead of the CIF-read path every
+# other oxide uses, so it's worth confirming that fallback still produces a sane geometry
+# after tonight's lattice-shear fix. RuO2 (4d, well-characterized rutile) rounds out facet
+# coverage on a chemistry none of this session's local runs have touched.
+#
+# 6 models x 2 oxides x 2 facets x 2 adsorbates = 48 relaxation legs, x (2 bulk/slab pairs
+# per oxide/facet) = 24 more -- comparable order of magnitude to the original design.
 #
 # PREREQUISITES:
-#   1. Repo up to date: git pull origin main (needs the lattice-shear fix commit)
-#   2. "chgnet", "orb", "esen" envs all exist (checked below)
-#   3. orb-v2-20241011.ckpt and esen_30m_oam.pt staged at $PROJECT/models/ (checked below;
-#      CHGNet's weights ship inside the package, no checkpoint file needed)
+#   1. Repo up to date: git pull origin main (needs the lattice-shear fix + 15-model commits)
+#   2. "mace-clean", "fairchem", "sevenn" envs all exist (checked below) -- these predate
+#      this session and were never in question, unlike orb/chgnet/esen
+#   3. mace-mh-1.model, uma-s-1p2.pt, sevennet-omni.pth staged at $PROJECT/models/ (checked
+#      below, fatal if missing). uma-m-1p1.pt is ALSO checked but its presence was flagged
+#      unconfirmed in data/models.md -- if this job dies on that check, that's the answer,
+#      go stage it and resubmit rather than treating it as a surprise.
 #
 #   cd /scratch/st-akkiraju-1/$USER
 #   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_mo2_medium_test.slurm
@@ -71,23 +81,24 @@ cd "$SLURM_SUBMIT_DIR"
 
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
 
-for env in chgnet orb esen; do
+for env in mace-clean fairchem sevenn; do
     test -d "$OXW_CONDA_BASE/envs/$env" || {
         echo "missing conda env: $OXW_CONDA_BASE/envs/$env" >&2
         exit 1
     }
 done
-for ckpt in orb-v2-20241011.ckpt esen_30m_oam.pt; do
+for ckpt in mace-mh-1.model uma-s-1p2.pt uma-m-1p1.pt sevennet-omni.pth; do
     test -f "$OXW_MODEL_DIR/$ckpt" || {
-        echo "missing checkpoint: $OXW_MODEL_DIR/$ckpt" >&2
+        echo "missing checkpoint: $OXW_MODEL_DIR/$ckpt -- if this is uma-m-1p1.pt, its presence was unconfirmed going in; stage it (gated HF download) and resubmit" >&2
         exit 1
     }
 done
 
 OUT="$SLURM_SUBMIT_DIR/runs/mo2_medium_test"
 python "$REPO/scripts/ClaudeScripts/mo2_adsorption_benchmark.py" "$OUT" \
-    --oxides TiO2 CrO2 FeO2 --facets 110 100 --adsorbates O OH \
-    --models CHGNet-0.3.0 Orb-v2 eSEN-30M-OAM --fmax 0.02 "$@"
+    --oxides ZrO2 RuO2 --facets 110 100 --adsorbates O OH \
+    --models MACE-mh1-omat MACE-mh1-matpes UMA-oc22 UMA-M-omat SevenNet-omni-omat24 SevenNet-omni-mpa \
+    --fmax 0.02 "$@"
 
 echo
 echo "results in scratch: $OUT/results.jsonl"
