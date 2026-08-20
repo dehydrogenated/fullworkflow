@@ -1,0 +1,26 @@
+{
+  "model": "MACE-mh1-omat",
+  "fragment": "OO_68ce519b",
+  "species": [
+    "O",
+    "O"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.208
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -9.896585393771215,
+  "nsteps": 16,
+  "converged": true
+}

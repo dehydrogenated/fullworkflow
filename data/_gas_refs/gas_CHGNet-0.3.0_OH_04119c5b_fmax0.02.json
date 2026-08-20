@@ -1,0 +1,26 @@
+{
+  "model": "CHGNet-0.3.0",
+  "fragment": "OH_04119c5b",
+  "species": [
+    "O",
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.3274,
+      0.8995
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -8.118115425109863,
+  "nsteps": 22,
+  "converged": true
+}

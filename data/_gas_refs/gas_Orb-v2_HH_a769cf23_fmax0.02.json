@@ -1,0 +1,26 @@
+{
+  "model": "Orb-v2",
+  "fragment": "HH_a769cf23",
+  "species": [
+    "H",
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.741
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -6.698209285736084,
+  "nsteps": 6,
+  "converged": true
+}

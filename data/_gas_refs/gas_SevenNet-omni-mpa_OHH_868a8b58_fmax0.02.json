@@ -1,0 +1,32 @@
+{
+  "model": "SevenNet-omni-mpa",
+  "fragment": "OHH_868a8b58",
+  "species": [
+    "O",
+    "H",
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.757,
+      0.5859
+    ],
+    [
+      0.0,
+      -0.757,
+      0.5859
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -14.227531433105469,
+  "nsteps": 16,
+  "converged": true
+}

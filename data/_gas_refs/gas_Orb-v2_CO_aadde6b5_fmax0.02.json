@@ -1,0 +1,26 @@
+{
+  "model": "Orb-v2",
+  "fragment": "CO_aadde6b5",
+  "species": [
+    "C",
+    "O"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.128
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -14.657463073730469,
+  "nsteps": 7,
+  "converged": true
+}

@@ -1,0 +1,20 @@
+{
+  "model": "UMA-oc20",
+  "fragment": "O_66da9f82",
+  "species": [
+    "O"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -0.10087057980993386,
+  "nsteps": 0,
+  "converged": true
+}

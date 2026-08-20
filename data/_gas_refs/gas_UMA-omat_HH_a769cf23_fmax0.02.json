@@ -1,0 +1,26 @@
+{
+  "model": "UMA-omat",
+  "fragment": "HH_a769cf23",
+  "species": [
+    "H",
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      0.741
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -6.649674317597928,
+  "nsteps": 5,
+  "converged": true
+}

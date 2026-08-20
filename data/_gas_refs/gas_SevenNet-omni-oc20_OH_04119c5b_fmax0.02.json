@@ -1,0 +1,26 @@
+{
+  "model": "SevenNet-omni-oc20",
+  "fragment": "OH_04119c5b",
+  "species": [
+    "O",
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.3274,
+      0.8995
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -7.6441473960876465,
+  "nsteps": 5,
+  "converged": true
+}

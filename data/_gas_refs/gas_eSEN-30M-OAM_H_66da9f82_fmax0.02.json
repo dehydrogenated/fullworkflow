@@ -1,0 +1,20 @@
+{
+  "model": "eSEN-30M-OAM",
+  "fragment": "H_66da9f82",
+  "species": [
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -3.9386746883392334,
+  "nsteps": 0,
+  "converged": true
+}

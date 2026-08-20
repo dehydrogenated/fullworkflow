@@ -1,0 +1,26 @@
+{
+  "model": "MACE-mh1-oc20",
+  "fragment": "CO_aadde6b5",
+  "species": [
+    "C",
+    "O"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.0,
+      1.128
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.02,
+  "optimizer": "FIRE",
+  "energy": -14.352674269546647,
+  "nsteps": 13,
+  "converged": true
+}

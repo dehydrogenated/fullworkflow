@@ -1,0 +1,32 @@
+{
+  "model": "SevenNet-omni-omat24",
+  "fragment": "OHH_868a8b58",
+  "species": [
+    "O",
+    "H",
+    "H"
+  ],
+  "coords": [
+    [
+      0.0,
+      0.0,
+      0.0
+    ],
+    [
+      0.0,
+      0.757,
+      0.5859
+    ],
+    [
+      0.0,
+      -0.757,
+      0.5859
+    ]
+  ],
+  "box": 15.0,
+  "fmax": 0.1,
+  "optimizer": "FIRE",
+  "energy": -14.277631759643555,
+  "nsteps": 5,
+  "converged": true
+}
