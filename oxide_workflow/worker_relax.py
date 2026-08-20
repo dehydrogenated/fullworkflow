@@ -163,17 +163,21 @@ def main(jobfile: str) -> None:
     d_trend_ref = None
     early_stopped_desorbing = False
 
-    # The reverse case: max_steps runs out unconverged, but the adsorbate is still
-    # net-approaching the surface (real work still happening, not oscillation) -- checked
-    # by comparing distance at (max_steps - extend_steps) against distance at max_steps.
-    # Repeatable up to max_extensions rounds, each one comparing against the previous
-    # round's starting distance, for a start far enough out that one extension isn't
-    # necessarily enough to finish the approach.
+    # The reverse case: max_steps runs out unconverged, but the adsorbate hasn't floated
+    # off -- checked against the anchor's STARTING distance (fixed at t=0), not a rolling
+    # per-window baseline: an adsorbate that already reached the surface can legitimately
+    # stop monotonically closing the gap while still doing real work (e.g. an H shimmying
+    # laterally toward a bridge O, distance from ITS anchor barely changing round to round)
+    # -- a rolling window reads that as "stopped closing" and cuts the extension short even
+    # though the trajectory is nowhere near desorbing. Comparing against the fixed start
+    # instead asks "is it still on/near the surface it landed on", the same basis the
+    # terminal desorption check below uses (end_dist > start_dist), so a trajectory only
+    # loses its extension budget once it's actually trending toward that same failure mode.
+    # Repeatable up to max_extensions rounds.
     extend_if_approaching = bool(spec.get("extend_if_approaching", False))
     extend_steps = int(spec.get("extend_steps", 100))
     max_extensions = int(spec.get("max_extensions", 1))
-    extend_window_step = max(max_steps - extend_steps, 0) if extend_if_approaching and n_ads else None
-    d_before_extend_window = None
+    d_start = anchor_surface_distance(atoms, n_ads) if extend_if_approaching and n_ads else None
     extensions_used = 0
 
     opt = optimizer(target, logfile=str(workdir / "opt.log"))
@@ -188,20 +192,17 @@ def main(jobfile: str) -> None:
                 if d_trend_ref is not None and d_now > d_trend_ref:
                     early_stopped_desorbing = True
                     break
-            if extend_window_step is not None and opt.nsteps == extend_window_step:
-                d_before_extend_window = anchor_surface_distance(atoms, n_ads)
 
         while (
             not early_stopped_desorbing
             and extend_if_approaching
-            and d_before_extend_window is not None
+            and d_start is not None
             and max_force(atoms) > fmax
             and extensions_used < max_extensions
         ):
             d_now = anchor_surface_distance(atoms, n_ads)
-            if not (d_now < d_before_extend_window):  # stopped closing the gap -- done extending
+            if not (d_now < d_start):  # at or past where it started -- treat as done extending
                 break
-            d_before_extend_window = d_now  # this round's "now" is next round's baseline
             for _converged in opt.irun(fmax=fmax, steps=extend_steps):
                 pass
             extensions_used += 1
