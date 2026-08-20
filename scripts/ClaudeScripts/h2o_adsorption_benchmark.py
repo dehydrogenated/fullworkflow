@@ -174,8 +174,12 @@ def run_adsorbate(
     # bond length for that pair. This is independent of whether the H-Obr bond formed --
     # it only asks "did the water stay bound to the surface, or drift away."
     end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
-    adsorbed = end_dist is not None and bond_len is not None and end_dist < DESORB_TOL * bond_len
-    h_bonded = end_h_o2c < 2.3  # standard H-bond cutoff; informational, separate question
+    # bool(...): end_h_o2c/end_dist/bond_len trace back through Structure.get_distance(),
+    # which returns numpy floats -- comparisons against them are numpy.bool_, and
+    # json.dumps() rejects that (confirmed: TypeError on Sockeye without this wrap, since
+    # is_dissociated() had the exact same gap -- see its own comment).
+    adsorbed = bool(end_dist is not None and bond_len is not None and end_dist < DESORB_TOL * bond_len)
+    h_bonded = bool(end_h_o2c < 2.3)  # standard H-bond cutoff; informational, separate question
 
     print(f"    [nudge={nudge}] E_ads={e_ads:+.4f} eV (lit {info['lit_e_ads_eV']:+.4f} eV, {info['lit_form']})  "
           f"adsorbed={adsorbed} (O-anchor={end_dist:.3f} A, bond~{bond_len:.3f} A)  "

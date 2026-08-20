@@ -274,8 +274,13 @@ def translate_toward(
 def is_dissociated(structure: Structure, h_idx: int, o_water_idx: int, o2c_idx: int) -> bool:
     """True once the oriented H has left the water oxygen's bonding range and entered the
     bridging O2c's -- i.e. a real O-H bond broke and a new one formed, not just a stretch
-    (OH_BOND_MAX matches oc22_diverge.py's own dissociated-vs-stretched cutoff)."""
-    return (
+    (OH_BOND_MAX matches oc22_diverge.py's own dissociated-vs-stretched cutoff).
+
+    Wrapped in bool(): Structure.get_distance() returns a numpy float, so the comparisons
+    below are numpy.bool_, not Python's built-in bool -- json.dumps() rejects numpy.bool_
+    (it checks isinstance(x, bool) specifically), so a caller writing this straight into a
+    results row crashes on write. Confirmed via an actual TypeError on Sockeye, not assumed."""
+    return bool(
         structure.get_distance(h_idx, o_water_idx) > OH_BOND_MAX
         and structure.get_distance(h_idx, o2c_idx) < OH_BOND_MAX
     )
