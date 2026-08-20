@@ -76,10 +76,16 @@ ALL_OXIDES = tuple(OXIDES)
 
 
 def undercoordinated_metal_site(candidates):
+    # site_label is f"{element}{coordination}c" (see stages.py's site_label()) -- excluding
+    # oxygen sites needs the actual "O<digits>c" pattern, not a bare startswith("O"): that
+    # also matches Os ("Os5c", "Os6c"), the one metal in this dataset whose symbol itself
+    # starts with O. Confirmed via a real OsO2 candidate list: adsorbate_candidates() found
+    # Os5c/Os6c ontop sites on both facets, but startswith("O") silently discarded both,
+    # raising "no metal ontop site found" for a metal that was right there.
     metal_ontop = [
         c for c in candidates
         if c.site_id["symmetry_class"] == "ontop"
-        and c.site_id["site_label"] and not c.site_id["site_label"].startswith("O")
+        and c.site_id["site_label"] and not re.match(r"^O\d+c$", c.site_id["site_label"])
     ]
     if not metal_ontop:
         raise RuntimeError("no metal ontop site found")
