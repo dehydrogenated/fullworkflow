@@ -6,10 +6,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=6:00:00  # 12 models x 3 oxides x 1 nudge; ~2-2.5h estimated normal case,
-# margin for UMA-M-* running noticeably slower than the rest (confirmed on Sockeye, not
-# a hang -- it's last in MODELS regardless, so its rows land last without delaying
-# anything else's -- see the Python script's own comment)
+#SBATCH --time=7:00:00  # 14 models x 3 oxides x 1 nudge; margin for UMA-M-* running
+# noticeably slower than the rest (confirmed on Sockeye, not a hang -- it's last in
+# MODELS regardless, so its rows land last without delaying anything else's)
 #SBATCH --job-name=h2o-ads
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
@@ -18,13 +17,13 @@
 # 2989-2999) Table 3 -- see scripts/ClaudeScripts/h2o_adsorption_benchmark.py for the
 # rationale. One relaxation per (oxide, model): no dissociation probing, no nudge-apart
 # re-relaxation (that's h2o_dissociation_probe.py's job, a separate track). Default models
-# are the full GPU-capable roster (12 models: MACE-mh1 x3, UMA-S x2, UMA-M x2, SevenNet-omni
-# x4, eSEN) spanning 4 conda envs (mace-clean/fairchem/sevenn/esen) -- fine in one job,
-# since relax() always launches each model in its own env via subprocess; only the
-# submitting shell needs oxw. Orb-v2/CHGNet-0.3.0 are deliberately NOT here -- their envs
-# pull a torch build with no V100 kernels; run sockeye_h2o_adsorption_benchmark_cpu.slurm
-# for those two instead, same output directory. Each (oxide, model) pair is independent
-# and failure-isolated. Needs the -gpu account (a different allocation from the CPU jobs
+# are the full roster (14: MACE-mh1 x3, UMA-S x2, UMA-M x2, SevenNet-omni x4, eSEN,
+# CHGNet-0.3.0, Orb-v2) spanning 6 conda envs -- fine in one job, since relax() always
+# launches each model in its own env via subprocess; only the submitting shell needs oxw.
+# Orb-v2/CHGNet-0.3.0 run on GPU directly now (their envs' torch build was fixed to be
+# CUDA-compatible) -- sockeye_h2o_adsorption_benchmark_cpu.slurm is no longer needed for
+# new runs, kept only as a fallback. Each (oxide, model) pair is independent and
+# failure-isolated. Needs the -gpu account (a different allocation from the CPU jobs
 # elsewhere in this repo -- Sockeye rejects --gres=gpu otherwise). Submit from /scratch:
 #
 #   cd /scratch/st-akkiraju-1/$USER
@@ -90,7 +89,7 @@ python -c "import oxide_workflow, sys; print('python', sys.version.split()[0])"
 # over. Only checks the default list's checkpoints; a custom --models overriding this
 # doesn't get the same guard. uma-m-1p1.pt is gated (manual HF download, see backends.py)
 # -- if this fails on that one specifically, that's the checkpoint to go stage by hand.
-for ckpt in mace-mh-1.model uma-s-1p2.pt uma-m-1p1.pt sevennet-omni.pth esen_30m_oam.pt; do
+for ckpt in mace-mh-1.model uma-s-1p2.pt uma-m-1p1.pt sevennet-omni.pth esen_30m_oam.pt orb-v2-20241011.ckpt; do
     test -f "$OXW_MODEL_DIR/$ckpt" || {
         echo "missing checkpoint: $OXW_MODEL_DIR/$ckpt" >&2
         exit 1

@@ -82,11 +82,11 @@ OXIDES = {
         "lit_form": "diss (paper found no mol minimum)",
     },
 }
-# Full GPU-capable roster (Sean's original model list). Orb-v2 and CHGNet-0.3.0 are
-# deliberately excluded here -- their "orb"/"chgnet" envs pull an unpinned torch+cu130
-# with no kernels for Sockeye's V100s (CC 7.0), confirmed on the mo2_adsorption_benchmark
-# sweep (see sockeye_chgnet_orb_cpu_backfill.slurm's own comment) -- they run via
-# sockeye_h2o_adsorption_benchmark_cpu.slurm instead, same script, CPU-forced.
+# Full model roster (Sean's original list). Orb-v2/CHGNet-0.3.0 now run directly on GPU
+# -- their "orb"/"chgnet" envs previously pulled a torch+cu130 build with no kernels for
+# Sockeye's V100s (CC 7.0), fixed by reinstalling both with a CUDA-compatible torch;
+# sockeye_h2o_adsorption_benchmark_cpu.slurm is no longer needed for new runs but is left
+# in place as a fallback.
 # UMA-M-* last on purpose: gated uma-m-1p1.pt checkpoint, and noticeably slower per
 # relaxation than the rest of the roster (confirmed on Sockeye, not just a documented
 # risk -- backends.py's fairchem#2095 note describes a predictor-construction hang some
@@ -96,7 +96,7 @@ MODELS = [
     "MACE-mh1-omat", "MACE-mh1-oc20", "MACE-mh1-matpes",
     "UMA-omat", "UMA-oc22",
     "SevenNet-omni-omat24", "SevenNet-omni-oc20", "SevenNet-omni-oc22", "SevenNet-omni-mpa",
-    "eSEN-30M-OAM",
+    "eSEN-30M-OAM", "CHGNet-0.3.0", "Orb-v2",
     "UMA-M-omat", "UMA-M-oc20",
 ]
 SEED_STANDOFF = 1.2  # matches h2o_dissociation_probe.py -- see its own comment

@@ -47,6 +47,11 @@ Literature values:
   (-1.76 to -1.97 eV). -2.311 eV is recorded as the primary comparison point since it's
   the paper's own directly-computed DFT number, with the corrected range as context.
 
+Default MODELS is the full roster (14): CHGNet-0.3.0 and Orb-v2 included directly now
+that their envs pull a CUDA-compatible torch build (previously incompatible with
+Sockeye's V100s, which needed a separate CPU-forced job -- not needed anymore).
+UMA-M-* stays last since it's still the slowest.
+
     python scripts/ClaudeScripts/co_h_adsorption_benchmark.py runs/co_h_ads_benchmark
     python scripts/ClaudeScripts/co_h_adsorption_benchmark.py runs/co_h_ads_benchmark --oxides IrO2
 """
@@ -90,7 +95,16 @@ OXIDES = {
         },
     },
 }
-MODELS = ["MACE-mh1-omat", "UMA-omat", "UMA-oc22", "SevenNet-omni-omat24"]
+# UMA-M-* last on purpose (see h2o_adsorption_benchmark.py's identical comment): it's the
+# slowest model in the roster, so keeping it last means every other model's rows are
+# already written before it's done, regardless of how long it takes.
+MODELS = [
+    "MACE-mh1-omat", "MACE-mh1-oc20", "MACE-mh1-matpes",
+    "UMA-omat", "UMA-oc22",
+    "SevenNet-omni-omat24", "SevenNet-omni-oc20", "SevenNet-omni-oc22", "SevenNet-omni-mpa",
+    "eSEN-30M-OAM", "CHGNet-0.3.0", "Orb-v2",
+    "UMA-M-omat", "UMA-M-oc20",
+]
 SEED_STANDOFF = 0.5  # see module docstring -- validated, don't push tighter
 FMAX = 0.01
 DESORB_TOL = 2.0
@@ -135,11 +149,14 @@ def undercoordinated_oxygen_site(candidates):
     return min(oxygen_ontop, key=coord)
 
 
-def run_one(model: str, oxide: str, adsorbate: str, outdir: Path, cfg: RunConfig) -> dict:
+def relax_bulk_slab(model: str, oxide: str, outdir: Path, cfg: RunConfig):
+    """Bulk + slab relaxation for one (model, oxide) -- shared by every adsorbate tested
+    on that oxide (CO and H both start from the identical pristine TiO2 slab), so this
+    avoids re-relaxing it once per adsorbate. Same reasoning as
+    h2o_adsorption_benchmark.py's own relax_bulk_slab()."""
     backend = get_backend(model)
     mp_id = OXIDES[oxide]["mp_id"]
-    info = OXIDES[oxide]["adsorbates"][adsorbate]
-    odir = outdir / oxide / adsorbate / model
+    odir = outdir / oxide / model
 
     def relax_record(structure, stage, source_desc, relax_cell=False):
         out = pipeline._relax_record(
@@ -151,14 +168,23 @@ def run_one(model: str, oxide: str, adsorbate: str, outdir: Path, cfg: RunConfig
               f"{out.elapsed_s:.0f}s", flush=True)
         return out
 
-    print(f"[{oxide} / {adsorbate} / {model}]", flush=True)
+    print(f"[{oxide} / {model}]", flush=True)
     start = get_structure(mp_id)
     bulk = relax_record(start, "bulk", "db", relax_cell=True).structure
     slab_in = make_slab(bulk, cfg.slab)
     slab_out = relax_record(slab_in, "slab", "cut_from_relaxed_bulk")
-    pristine_energy = slab_out.energy
-    pristine_structure = slab_out.structure
+    return slab_out.structure, slab_out.energy
 
+
+def run_adsorbate(
+    model: str, oxide: str, adsorbate: str, pristine_structure, pristine_energy: float,
+    outdir: Path, cfg: RunConfig,
+) -> dict:
+    backend = get_backend(model)
+    info = OXIDES[oxide]["adsorbates"][adsorbate]
+    odir = outdir / oxide / adsorbate / model
+
+    print(f"  -> {adsorbate}", flush=True)
     ads_species, ads_coords = ADSORBATE_FRAGMENTS[adsorbate]
     n_ads = len(ads_species)
 
@@ -222,20 +248,46 @@ def main(outdir: Path, oxides: list[str], adsorbates: list[str], models: list[st
         },
     }, indent=2))
 
+    # Model-outer, oxide-inner, adsorbate-innermost: every other model finishes across
+    # both oxides (and both adsorbates, sharing bulk/slab) before the slowest one
+    # (UMA-M-*, last in MODELS) even starts. See h2o_adsorption_benchmark.py's identical
+    # comment for the full reasoning.
+    # (oxide, adsorbate) combos not defined for that oxide (e.g. IrO2/H) -- computed once,
+    # independent of which models are running, so it isn't repeated per model below.
+    wanted_by_oxide = {o: [a for a in adsorbates if a in OXIDES[o]["adsorbates"]] for o in oxides}
+    skipped = [
+        f"{o}/{a}" for o in oxides for a in adsorbates if a not in OXIDES[o]["adsorbates"]
+    ]
+
     pair_failures: list[str] = []
-    skipped: list[str] = []
-    for oxide in oxides:
-        for adsorbate in adsorbates:
-            if adsorbate not in OXIDES[oxide]["adsorbates"]:
-                skipped.append(f"{oxide}/{adsorbate}")
+    for model in models:
+        for oxide in oxides:
+            wanted = wanted_by_oxide[oxide]
+            if not wanted:
                 continue
-            for model in models:
-                tag = f"{oxide}/{adsorbate}/{model}"
+            tag = f"{oxide}/{model}"
+            try:
+                pristine_structure, pristine_energy = relax_bulk_slab(model, oxide, outdir, cfg)
+            except Exception as e:
+                print(f"  [{tag}] BULK/SLAB FAILED: {e}", flush=True)
+                pair_failures.append(f"{tag} (bulk/slab): {str(e)[:300]}")
+                for adsorbate in wanted:
+                    row = {
+                        "model": model, "oxide": oxide, "adsorbate": adsorbate, "failed": True,
+                        "error": f"bulk/slab: {e}"[:2000], "e_ads_eV": None, "adsorbed": None,
+                        "converged": None, "nsteps": None,
+                    }
+                    with results_path.open("a") as f:
+                        f.write(json.dumps(row) + "\n")
+                continue
+
+            for adsorbate in wanted:
+                atag = f"{tag}/{adsorbate}"
                 try:
-                    row = run_one(model, oxide, adsorbate, outdir, cfg)
+                    row = run_adsorbate(model, oxide, adsorbate, pristine_structure, pristine_energy, outdir, cfg)
                 except Exception as e:
-                    print(f"  [{tag}] PAIR FAILED: {e}", flush=True)
-                    pair_failures.append(f"{tag}: {str(e)[:300]}")
+                    print(f"  [{atag}] PAIR FAILED: {e}", flush=True)
+                    pair_failures.append(f"{atag}: {str(e)[:300]}")
                     row = {
                         "model": model, "oxide": oxide, "adsorbate": adsorbate, "failed": True,
                         "error": f"{e}"[:2000], "e_ads_eV": None, "adsorbed": None,
