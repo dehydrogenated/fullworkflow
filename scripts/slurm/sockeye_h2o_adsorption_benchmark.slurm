@@ -6,7 +6,9 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=4:00:00
+#SBATCH --time=6:00:00  # 12 models x 3 oxides x 1 nudge; ~2-2.5h estimated normal case,
+# margin for UMA-M-*'s known hang risk (last in MODELS, so a hang there doesn't cost
+# the other 10 models' data either way -- see the Python script's own comment)
 #SBATCH --job-name=h2o-ads
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
@@ -15,11 +17,14 @@
 # 2989-2999) Table 3 -- see scripts/ClaudeScripts/h2o_adsorption_benchmark.py for the
 # rationale. One relaxation per (oxide, model): no dissociation probing, no nudge-apart
 # re-relaxation (that's h2o_dissociation_probe.py's job, a separate track). Default models
-# span 3 conda envs (mace-clean/fairchem/sevenn) -- fine in one job, since relax() always
-# launches each model in its own env via subprocess; only the submitting shell needs oxw.
-# Each (oxide, model) pair is independent and failure-isolated. Needs the -gpu account (a
-# different allocation from the CPU jobs elsewhere in this repo -- Sockeye rejects
-# --gres=gpu otherwise). Submit from /scratch:
+# are the full GPU-capable roster (12 models: MACE-mh1 x3, UMA-S x2, UMA-M x2, SevenNet-omni
+# x4, eSEN) spanning 4 conda envs (mace-clean/fairchem/sevenn/esen) -- fine in one job,
+# since relax() always launches each model in its own env via subprocess; only the
+# submitting shell needs oxw. Orb-v2/CHGNet-0.3.0 are deliberately NOT here -- their envs
+# pull a torch build with no V100 kernels; run sockeye_h2o_adsorption_benchmark_cpu.slurm
+# for those two instead, same output directory. Each (oxide, model) pair is independent
+# and failure-isolated. Needs the -gpu account (a different allocation from the CPU jobs
+# elsewhere in this repo -- Sockeye rejects --gres=gpu otherwise). Submit from /scratch:
 #
 #   cd /scratch/st-akkiraju-1/$USER
 #   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_h2o_adsorption_benchmark.slurm
@@ -82,8 +87,9 @@ python -c "import oxide_workflow, sys; print('python', sys.version.split()[0])"
 
 # Fail before burning walltime if a checkpoint the default --models needs never made it
 # over. Only checks the default list's checkpoints; a custom --models overriding this
-# doesn't get the same guard.
-for ckpt in mace-mh-1.model uma-s-1p2.pt sevennet-omni.pth; do
+# doesn't get the same guard. uma-m-1p1.pt is gated (manual HF download, see backends.py)
+# -- if this fails on that one specifically, that's the checkpoint to go stage by hand.
+for ckpt in mace-mh-1.model uma-s-1p2.pt uma-m-1p1.pt sevennet-omni.pth esen_30m_oam.pt; do
     test -f "$OXW_MODEL_DIR/$ckpt" || {
         echo "missing checkpoint: $OXW_MODEL_DIR/$ckpt" >&2
         exit 1

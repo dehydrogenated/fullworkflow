@@ -25,13 +25,20 @@ paper's own mol/diss split) rather than compare energies across mismatched confi
 Placement (seed_standoff, orient_toward's "bisector" mode, DIAGONAL_NUDGE) reuses
 h2o_dissociation_probe.py's already-validated recipe: single_h_ti_facing repulsed instead
 of adsorbing on TiO2 (its pre-bend mirror step starts both H's pointed into the surface),
-bisector adsorbed. Rotation alone couldn't close the O-H...O2c gap (a full relaxation left
-it at 1.95 A, down from ~2.9-3.6 A at the start -- a distance problem, not an orientation
-one), hence the added rigid translate.
+bisector adsorbed. Rotation alone couldn't close the O-H...O2c gap on its own -- the nudge
+translates the seed toward O2c, restricted to the surface-plane (lateral) direction only
+(Ti->O2c is not lateral -- the bridging O protrudes above the M5c plane, so translating
+along the raw 3D direction pushes the seed higher with every nudge instead of sliding it
+sideways; orient_toward still uses the full 3D vector for the H tilt, only the rigid
+translate is restricted). DIAGONAL_NUDGE=1.0 is validated as the sweet spot: it's the only
+value across a 1.0/1.5/2.0/2.5 sweep that actually converges within budget on TiO2/RuO2/IrO2
+-- everything above it moves the seed too far off-axis to re-approach the surface in time.
+On IrO2 specifically, this seed found the paper's own dissociated basin unprompted with no
+dissociation-probing machinery at all -- a real, unforced match to their finding that
+IrO2(110) has no molecular minimum.
 
     python scripts/ClaudeScripts/h2o_adsorption_benchmark.py runs/h2o_ads_benchmark
     python scripts/ClaudeScripts/h2o_adsorption_benchmark.py runs/h2o_ads_benchmark --oxides RuO2 IrO2 --models UMA-omat
-    python scripts/ClaudeScripts/h2o_adsorption_benchmark.py runs/h2o_ads_benchmark --nudges 1.0 1.5 2.0 2.5
 """
 
 from __future__ import annotations
@@ -75,10 +82,26 @@ OXIDES = {
         "lit_form": "diss (paper found no mol minimum)",
     },
 }
-MODELS = ["MACE-mh1-omat", "UMA-omat", "UMA-oc22", "SevenNet-omni-omat24"]
+# Full GPU-capable roster (Sean's original model list). Orb-v2 and CHGNet-0.3.0 are
+# deliberately excluded here -- their "orb"/"chgnet" envs pull an unpinned torch+cu130
+# with no kernels for Sockeye's V100s (CC 7.0), confirmed on the mo2_adsorption_benchmark
+# sweep (see sockeye_chgnet_orb_cpu_backfill.slurm's own comment) -- they run via
+# sockeye_h2o_adsorption_benchmark_cpu.slurm instead, same script, CPU-forced.
+# UMA-M-* last on purpose: gated uma-m-1p1.pt checkpoint, known predictor-construction
+# hang on some setups (fairchem#2095) -- if it hangs, every other model has already run
+# and written its rows before walltime eventually kills the job.
+MODELS = [
+    "MACE-mh1-omat", "MACE-mh1-oc20", "MACE-mh1-matpes",
+    "UMA-omat", "UMA-oc22",
+    "SevenNet-omni-omat24", "SevenNet-omni-oc20", "SevenNet-omni-oc22", "SevenNet-omni-mpa",
+    "eSEN-30M-OAM",
+    "UMA-M-omat", "UMA-M-oc20",
+]
 SEED_STANDOFF = 1.2  # matches h2o_dissociation_probe.py -- see its own comment
-DIAGONAL_NUDGE = 1.0  # matches h2o_dissociation_probe.py -- see its own comment
-FMAX = 0.02
+DIAGONAL_NUDGE = 1.0  # validated: the only nudge value that actually converges (see
+# h2o_dissociation_probe.py's history) -- 1.5/2.0/2.5 all failed to converge within budget
+FMAX = 0.01  # validated on TiO2/RuO2/IrO2 -- SevenNet TiO2 adsorbed cleanly, IrO2 found
+# the literature's own dissociated basin unprompted
 DESORB_CHECK_STEP = 100
 DESORB_TREND_WINDOW = 20
 EXTEND_STEPS = 100
@@ -225,13 +248,15 @@ def main(
         "literature_source": "Gonzalez et al. 2019, ACS Omega 4, 2989-2999, Table 3 (110)",
     }, indent=2))
 
-    # Models ordered as given -- put any model with a known hang/instability risk (e.g.
-    # UMA-M-omat, see backends.py's fairchem#2095 note) LAST in --models, so a hang there
-    # burns walltime only after every better-behaved model/nudge combination has already
-    # run and been written.
+    # Model-outer, oxide-inner on purpose -- put any model with a known hang/instability
+    # risk (e.g. UMA-M-*, see backends.py's fairchem#2095 note) LAST in --models. With
+    # model as the outer loop, every other model finishes across ALL oxides before a risky
+    # one even starts, so a hang there only costs its own rows, not RuO2/IrO2 data for
+    # models that already ran cleanly (oxide-outer would let a hang on TiO2 block every
+    # later oxide too, even for models that had nothing to do with the hang).
     pair_failures: list[str] = []
-    for oxide in oxides:
-        for model in models:
+    for model in models:
+        for oxide in oxides:
             tag = f"{oxide}/{model}"
             try:
                 pristine_structure, pristine_energy = relax_bulk_slab(model, oxide, outdir, cfg)
