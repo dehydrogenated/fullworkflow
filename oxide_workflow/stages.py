@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 from ase.data import atomic_numbers, covalent_radii
 from pymatgen.analysis.adsorption import AdsorbateSiteFinder
-from pymatgen.core import Molecule, Structure
+from pymatgen.core import Lattice, Molecule, Structure
 from pymatgen.core.surface import SlabGenerator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
@@ -107,6 +107,32 @@ def exposed_surface_atoms(
 
 # --- Slab ---------------------------------------------------------------------------------
 
+# SlabGenerator's lattice reduction (lll_reduce=True) can mix a fraction of the long,
+# vacuum-including c-vector into the in-plane a/b vectors to shorten them -- confirmed via
+# SlabGenerator's un-reduced oriented_unit_cell (a_z=b_z=0 there), so it's a reduction
+# artifact, not a real tilt of this tetragonal facet's flat-by-symmetry layers. Seen as
+# b_z=-1.19 A on a real eSEN TiO2(110) slab vs. Orb-v2's ~-0.003 A on the same facet --
+# small per-model differences in converged bulk lattice constants tip this from negligible
+# to large. Rebuilding with a_z=b_z=0 at fixed fractional coordinates removes it: two
+# atoms in the same crystallographic layer no longer land up to ~1 A apart in Cartesian z.
+def _orthogonalize_inplane_lattice(slab: Structure, atol: float = 1e-3) -> Structure:
+    m = slab.lattice.matrix.copy()
+    if abs(m[2][0]) > atol or abs(m[2][1]) > atol:
+        raise ValueError(
+            f"slab's c-vector isn't vertical (c={m[2]}) -- in-plane orthogonalization "
+            "assumes a,b span the surface and c is the vacuum/out-of-plane direction"
+        )
+    if abs(m[0][2]) < atol and abs(m[1][2]) < atol:
+        return slab  # already clean, common case (e.g. the (100) facet) -- no rebuild needed
+    clean = m.copy()
+    clean[0][2] = 0.0
+    clean[1][2] = 0.0
+    return Structure(
+        Lattice(clean), slab.species, slab.frac_coords,
+        site_properties=slab.site_properties, coords_are_cartesian=False,
+    )
+
+
 # Cuts the configured facet/termination from a relaxed bulk, replicates it to the configured
 # supercell, and freezes the bottom fraction at bulk positions.
 def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
@@ -127,6 +153,7 @@ def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
             f"({len(slabs)} terminations available)"
         )
     slab = Structure.from_sites(slabs[config.termination_index].sites)
+    slab = _orthogonalize_inplane_lattice(slab)
     nx, ny = config.supercell
     if (nx, ny) != (1, 1):
         slab.make_supercell([nx, ny, 1])
