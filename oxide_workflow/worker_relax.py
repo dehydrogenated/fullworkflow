@@ -67,7 +67,12 @@ def build_calculator(spec: dict):
         # points at an already-staged local file (needed offline, e.g. a Sockeye
         # compute node with no outbound network), in which case load from that
         # directly instead of ever touching the network.
-        kwargs = {"device": spec.get("device", "cpu")}
+        # compile=False: orb_v2()'s default lets torch.compile kick in, which JITs CPU
+        # kernels via a C++ compiler (g++) -- fine on a dev machine with Xcode CLI tools,
+        # but Sockeye compute nodes don't have one in PATH and die with InvalidCxxCompiler.
+        # Disabling compile avoids needing a C++ toolchain at all rather than chasing down
+        # whether/how to make one available on a compute node.
+        kwargs = {"device": spec.get("device", "cpu"), "compile": False}
         ckpt = spec.get("checkpoint_path")
         if ckpt and Path(ckpt).exists():
             kwargs["weights_path"] = ckpt
