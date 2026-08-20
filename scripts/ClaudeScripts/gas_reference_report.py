@@ -45,12 +45,12 @@ from oxide_workflow.energetics import WATER_FORMATION_ENTHALPY_EXP, gas_referenc
 FRAGMENTS = ["O", "H", "H2O", "CO", "OH"]
 DEFAULT_MODELS = [
     "CHGNet-0.3.0", "Orb-v2",
-    "MACE-mh1-omat", "MACE-mh1-oc20",
+    "MACE-mh1-omat", "MACE-mh1-oc20", "MACE-mh1-matpes",
     "UMA-omat", "UMA-oc20", "UMA-oc22",
     "UMA-M-omat", "UMA-M-oc20",
-    "SevenNet-omni-omat24", "SevenNet-omni-oc20", "SevenNet-omni-oc22",
+    "SevenNet-omni-omat24", "SevenNet-omni-oc20", "SevenNet-omni-oc22", "SevenNet-omni-mpa",
     "eSEN-30M-OAM",
-]
+]  # matches the 15-model sweep roster (sockeye_mo2_sweep_{3d,4d,5d}.slurm)
 
 
 def one_model(model: str, fmax: float) -> dict:
