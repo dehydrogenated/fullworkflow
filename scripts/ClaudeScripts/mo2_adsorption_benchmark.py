@@ -24,15 +24,18 @@ Writes job.json (facets, adsorbates, standoff, fmax, models, oxides) into outdir
 provenance, same convention as o_adsorption_benchmark.py. Use a fresh outdir per sweep:
 results.jsonl is append-only.
 
-``--desorb-check-step`` defaults to 200, not o_adsorption_benchmark.py's 100: a 12-way
-orientation/standoff sweep on TiO2(110)/OH showed every variant converging to the *same*
-final bond length and energy regardless of starting geometry, but the ones flagged
-"desorbing" all did so at exactly step 100 while the rest settled cleanly by step 116-255
-(well under the 300-step budget) -- a false positive from FIRE's approach dynamics
-wobbling outward briefly around that checkpoint, not real desorption. O* alone never
-needed more than ~60 steps in this same sweep, so the tighter check stays fine there;
-OH*'s extra internal degree of freedom (the O-H bond can librate while approaching) is
-what needed the room.
+No mid-relaxation desorption early-stop (unlike o_adsorption_benchmark.py's O2/CO/H2O
+sweep). O* and OH* bind strongly on this whole oxide family -- literature E_ads values are
+large and favorable almost everywhere -- so a trend-based "is it drifting away over the
+last 20 steps" check is much more likely to catch normal FIRE-optimizer wobble than a
+genuine desorption event. Confirmed twice, not assumed: both Orb-v2/TiO2(110)/OH and
+CHGNet/TiO2(100)/OH got flagged "desorbing" by that heuristic while `desorbing_final_geometry`
+(a hard end-state check) said they hadn't actually left. This run isn't wall-clock
+constrained, so the extra steps a false positive would have saved aren't worth the risk of
+silently mislabeling a real, converged bind as a failure. Every leg now runs its full
+budget (max_steps, plus the existing extend-if-still-approaching mechanism) and is only
+flagged desorbing by a single terminal check: did it end up farther from its anchor than
+where it started.
 """
 
 from __future__ import annotations
@@ -47,12 +50,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from o_adsorption_benchmark import (  # noqa: E402
-    DESORB_TOL, DESORB_TREND_WINDOW, EXTEND_STEPS, MAX_EXTENSIONS,
-    TRIVIAL_START_TOL, undercoordinated_metal_site,
+    EXTEND_STEPS, MAX_EXTENSIONS, TRIVIAL_START_TOL, undercoordinated_metal_site,
 )
-
-DESORB_CHECK_STEP = 200  # see module docstring -- o_adsorption_benchmark.py's 100 is too
-# tight for OH*'s extra librational d.o.f.; O* alone never needed past ~60 steps here anyway.
 
 from oxide_workflow import pipeline  # noqa: E402
 from oxide_workflow.backends import get_backend, relax  # noqa: E402
@@ -163,7 +162,7 @@ def relax_bulk_slab(model: str, oxide: str, facet: str, mp_id: str, outdir: Path
 
 def run_adsorbate(model: str, oxide: str, facet: str, adsorbate: str,
                    pristine_structure, pristine_energy: float,
-                   outdir: Path, cfg: RunConfig, lit: dict, desorb_check_step: int) -> dict:
+                   outdir: Path, cfg: RunConfig, lit: dict) -> dict:
     backend = get_backend(model)
     odir = outdir / oxide / facet
     print(f"    -> {adsorbate}", flush=True)
@@ -194,11 +193,11 @@ def run_adsorbate(model: str, oxide: str, facet: str, adsorbate: str,
     # Shared null-out for both failure paths below, so every row (converged or not) has the
     # same keys -- downstream analysis never needs to special-case a missing key.
     null_result_fields = {
-        "e_ads_eV": None, "e_ads_corrected_eV": None, "bond_A": None,
+        "e_ads_eV": None, "e_ads_corrected_eV": None, "bond_A": None, "start_dist_A": None,
         "e_slab_ads_eV": None, "e_slab_pristine_eV": pristine_energy,
         "e_gas_ref_eV": e_ads_ref, "e_gas_ref_corrected_eV": e_ads_ref_corrected,
-        "desorbing": None, "desorbing_early_stop": None, "desorbing_final_geometry": None,
-        "trivial_start": None, "start_fmax": None, "extended": None, "extensions_used": None,
+        "desorbing": None, "trivial_start": None, "start_fmax": None,
+        "extended": None, "extensions_used": None,
         "converged": None, "nsteps": None, "elapsed_s": None, "s_per_step": None,
     }
     row = {
@@ -216,13 +215,21 @@ def run_adsorbate(model: str, oxide: str, facet: str, adsorbate: str,
     site_dir = odir / model / adsorbate / f"site{cand.site_id['site_index']}_{cand.site_id['symmetry_class']}"
     row["site"] = cand.site_id["site_label"]
     recenter_on_anchor(cand.structure, len(cand.structure) - n_ads)
+    # Recentering is a pure translation (see recenter_on_anchor's own docstring), so this is
+    # the same distance as before recentering -- just measured after it for convenience.
+    start_dist, _ = _adsorbate_anchor_distance(cand.structure, n_ads)
 
     try:
         res = relax(
             cand.structure, backend, workdir=site_dir,
             fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
-            desorb_check_n_ads=n_ads, desorb_check_step=desorb_check_step,
-            desorb_trend_window=DESORB_TREND_WINDOW,
+            # desorb_check_n_ads without desorb_check_step: worker_relax.py gates its whole
+            # distance-tracking mechanism on n_ads being set (needed for extend_if_approaching
+            # to know which atoms to track), separately from check_step (which fires the
+            # mid-relaxation early-stop -- omitted entirely, see module docstring). Dropping
+            # n_ads too silently disabled extensions as a side effect, confirmed by a real
+            # rerun that hit max_steps with extensions_used=0 when it should have qualified.
+            desorb_check_n_ads=n_ads,
             extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
         )
     except Exception as e:
@@ -239,24 +246,25 @@ def run_adsorbate(model: str, oxide: str, facet: str, adsorbate: str,
     e_ads = adsorption_energy(res.energy, pristine_energy, e_ads_ref)
     e_ads_corrected = adsorption_energy(res.energy, pristine_energy, e_ads_ref_corrected)
     elapsed_s = res.meta.get("elapsed_s")
-    end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
-    early_stopped = bool(res.meta.get("early_stopped_desorbing"))
-    desorbed_final = (
-        end_dist is not None and bond_len is not None and end_dist >= DESORB_TOL * bond_len
-    )
-    desorbing = early_stopped or desorbed_final
+    end_dist, _ = _adsorbate_anchor_distance(res.structure, n_ads)
+    # Single terminal desorption check, replacing the old mid-run trend heuristic (see
+    # module docstring): ended up farther from its anchor than where it started, after the
+    # full step budget (plus any extension) ran. No bond-length multiple involved -- a
+    # genuinely bound adsorbate should end up *closer* than its deliberately-standoffed
+    # starting placement almost by construction, so "net outward over the whole relaxation"
+    # is already a high-bar, low-false-positive signal on its own.
+    desorbing = end_dist is not None and start_dist is not None and end_dist > start_dist
     trivial_start = res.start_fmax <= TRIVIAL_START_TOL * cfg.relax.fmax
     row.update({
         "failed": False, "error": None, "e_ads_eV": e_ads, "e_ads_corrected_eV": e_ads_corrected,
-        "bond_A": end_dist,
+        "bond_A": end_dist, "start_dist_A": start_dist,
         # The three raw terms E_ads is built from: E(substrate+adsorbate), E(bare substrate),
         # E(isolated gas fragment) -- both the Comer-matching raw gas ref and the
         # ΔHf-corrected one, so e_ads_eV/e_ads_corrected_eV are independently reproducible
         # from these without re-running anything.
         "e_slab_ads_eV": res.energy, "e_slab_pristine_eV": pristine_energy,
         "e_gas_ref_eV": e_ads_ref, "e_gas_ref_corrected_eV": e_ads_ref_corrected,
-        "desorbing": desorbing, "desorbing_early_stop": early_stopped,
-        "desorbing_final_geometry": desorbed_final, "trivial_start": trivial_start,
+        "desorbing": desorbing, "trivial_start": trivial_start,
         "start_fmax": res.start_fmax, "extended": bool(res.meta.get("extended")),
         "extensions_used": res.meta.get("extensions_used", 0),
         "converged": res.converged, "nsteps": res.nsteps,
@@ -272,7 +280,7 @@ def run_adsorbate(model: str, oxide: str, facet: str, adsorbate: str,
 
 def main(
     outdir: Path, fmax: float, oxides: list[str], facets: list[str], adsorbates: list[str],
-    models: list[str], seed_standoff: float, desorb_check_step: int,
+    models: list[str], seed_standoff: float,
 ) -> None:
     lit = load_literature()
     outdir.mkdir(parents=True, exist_ok=True)
@@ -288,7 +296,8 @@ def main(
     job_path.write_text(json.dumps({
         "oxides": oxides, "resolved_mp_ids": resolved, "facets": facets,
         "adsorbates": adsorbates, "models": models, "seed_standoff": seed_standoff, "fmax": fmax,
-        "desorb_check_step": desorb_check_step,
+        "desorb_policy": "no mid-relaxation trend check; terminal check only "
+                          "(end_dist > start_dist after full budget + extensions)",
         "e_ads_reference": "Comer et al. 2022 Table S3 (H2O/H2 water-splitting, half-H2 for OH*)",
         "literature_source": str(LIT_CSV),
     }, indent=2))
@@ -337,7 +346,7 @@ def main(
                     try:
                         row = run_adsorbate(
                             model, oxide, facet, adsorbate, pristine_structure, pristine_energy,
-                            outdir, acfg, lit, desorb_check_step,
+                            outdir, acfg, lit,
                         )
                     except Exception as e:
                         print(f"  [{tag}] PAIR FAILED before relax: {e}", flush=True)
@@ -368,9 +377,5 @@ if __name__ == "__main__":
     ap.add_argument("--adsorbates", nargs="+", choices=["O", "OH"], default=["O", "OH"])
     ap.add_argument("--models", nargs="+", default=["Orb-v2"])
     ap.add_argument("--seed-standoff", type=float, default=SEED_STANDOFF)
-    ap.add_argument("--desorb-check-step", type=int, default=DESORB_CHECK_STEP)
     a = ap.parse_args()
-    main(
-        a.outdir, a.fmax, a.oxides, a.facets, a.adsorbates, a.models, a.seed_standoff,
-        a.desorb_check_step,
-    )
+    main(a.outdir, a.fmax, a.oxides, a.facets, a.adsorbates, a.models, a.seed_standoff)
