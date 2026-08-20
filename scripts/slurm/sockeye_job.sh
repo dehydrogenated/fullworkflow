@@ -72,16 +72,20 @@ export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
-# Ask SLURM what it gave us rather than taking a flag. CUDA_VISIBLE_DEVICES is set by the
-# scheduler only when --gres=gpu was granted, so this is the authoritative answer and it
-# cannot drift from reality:
+# Query the hardware directly rather than trusting CUDA_VISIBLE_DEVICES. This used to check
+# that variable instead, on the theory that SLURM sets it only when --gres=gpu was granted --
+# true of the scheduler's OWN behavior, but wrong in practice: sbatch inherits the entire
+# submitting shell's environment by default (no --export=NONE here), so a CUDA_VISIBLE_DEVICES
+# left over from an earlier interactive GPU session on the login node rides straight into a
+# job that never requested one. Confirmed: a --partition=cascade job (no --gres=gpu at all)
+# hit the identical "CUDA error: no kernel image is available for execution on the device"
+# crash as the real GPU jobs, because OXW_DEVICE still resolved to cuda from the stale
+# inherited value. nvidia-smi respects SLURM's own cgroup isolation, so -L correctly reports
+# nothing for a job that wasn't granted a GPU regardless of what the shell exported:
 #
 #     sbatch --partition=gpu --gres=gpu:1 ...   -> cuda
-#     sbatch --partition=cascade ...            -> cpu
-#
-# A forgotten flag would otherwise mean paying for a GPU node and running on its CPUs, and
-# nothing in the output would say so.
-if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+#     sbatch --partition=cascade ...            -> cpu, even with a stale env var inherited
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
     export OXW_DEVICE=cuda
 else
     export OXW_DEVICE=cpu

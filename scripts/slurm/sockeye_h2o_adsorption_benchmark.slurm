@@ -46,7 +46,11 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
 # Ask SLURM what it actually granted rather than assuming -- see sockeye_job.sh for why.
-if [ -n "${CUDA_VISIBLE_DEVICES:-}" ]; then
+# nvidia-smi, not CUDA_VISIBLE_DEVICES -- that env var is inherited from the submitting
+# shell by sbatch's default --export=ALL, so a stray value from an earlier interactive GPU
+# session can make a --partition=cascade job (no --gres=gpu) wrongly resolve to cuda. See
+# sockeye_job.sh for the full incident. nvidia-smi respects SLURM's cgroup isolation instead.
+if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
     export OXW_DEVICE=cuda
 else
     export OXW_DEVICE=cpu
