@@ -16,10 +16,18 @@ that's evidence of a genuine local minimum, not an artifact of where the startin
 orientation happened to land.
 
 Kowalski, Meyer & Marx, PRB 79, 115410 (2009) is the eventual literature target (Table VI
-+ NEB barrier ~0.14-0.16 eV), but this script doesn't compare against it yet -- it only
-asks the prior, cheaper question: can each model find the dissociated basin at all.
++ NEB barrier ~0.14-0.16 eV) for TiO2 specifically, but this script doesn't compare
+against it yet -- it only asks the prior, cheaper question: can each model find the
+dissociated basin at all.
 
-    python scripts/h2o_dissociation_probe.py runs/h2o_dissociation_probe
+Covers TiO2/RuO2/IrO2 (OXIDES) -- Gonzalez et al. 2019's three materials. All 4
+orientations were compared once already; MODES_TO_RUN narrows the default relax loop to
+just "bisector" (the one that adsorbed rather than repulsed) plus a DIAGONAL_NUDGE rigid
+translate on top of it, since rotation about a fixed O can't close a multi-A gap to O2c
+on its own -- see DIAGONAL_NUDGE's own comment. Re-widen MODES_TO_RUN to retest the others
+per-oxide if bisector doesn't transfer cleanly to Ru/Ir.
+
+    python scripts/h2o_dissociation_probe.py runs/h2o_dissociation_probe --oxides TiO2
 """
 
 from __future__ import annotations
@@ -47,7 +55,12 @@ from oxide_workflow.stages import (
 )
 from oxide_workflow.structures import get_structure
 
-MP_ID = "mp-2657"
+# TiO2/RuO2/IrO2 -- Gonzalez et al. 2019 (ACS Omega 4, 2989-2999)'s three materials.
+# find_ti_and_o2c_anchors()/orient_toward() are written generically (lowest-coordination
+# exposed metal + its nearest exposed O2c) despite the Ti-suffixed names below -- those
+# names predate this becoming a 3-material sweep and are kept as-is rather than renamed
+# across every call site for a purely cosmetic change.
+OXIDES = {"TiO2": "mp-2657", "RuO2": "mp-825", "IrO2": "mp-2723"}
 MODELS = ["MACE-mh1-omat", "UMA-oc22", "SevenNet-omni-omat24"]
 FMAX = 0.02
 OH_BOND_MAX = 1.3  # A; beyond this an O-H has dissociated, not stretched (oc22_diverge.py precedent)
@@ -58,6 +71,16 @@ NUDGE_TARGET_BOND = 0.957
 # during relaxation instead of nearly on top of its own answer, and reads clearly as a
 # separate starting frame rather than a placement glued to the surface.
 SEED_STANDOFF = 1.2
+# Rigid translate of the whole placed molecule (O and both H) toward O2c, on top of
+# orient_toward()'s rotation-only seed. Rotation alone can't close the gap: O is pinned
+# directly above Ti by the site-finder, and a real O-H bond is only ~0.957 A, so even a
+# perfectly-aimed H reaches barely a third of the way to an O2c that starts several A off
+# (confirmed empirically -- nudge_apart's own docstring records the bisector orientation
+# leaving the approaching H at 1.95 A after a *full* relaxation, down from ~2.9-3.6 A at
+# the start; most of that gap was a distance problem, not an orientation problem). 1.0 A
+# closes a meaningful fraction of that without placing O implausibly off its M5c anchor
+# or biasing the H already into a formed bond -- a starting guess, not the answer.
+DIAGONAL_NUDGE = 1.0
 DESORB_CHECK_STEP = 100
 DESORB_TREND_WINDOW = 20
 EXTEND_STEPS = 100
@@ -114,6 +137,14 @@ def find_ti_and_o2c_anchors(pristine: Structure) -> "tuple[int, int]":
 
 
 ORIENTATION_MODES = ("vertical", "vertical_flipped", "bisector", "single_h_ti_facing")
+# Which of ORIENTATION_MODES run_one() actually relaxes. All 4 were compared once already
+# (see git history / prior run notes): single_h_ti_facing repulsed instead of adsorbing --
+# its pre-bend mirror step starts both H's pointed down into the surface/metal region
+# instead of preserving the template's lone-pair-down pose, a likely steric cause -- while
+# bisector adsorbed (H...O2c closed to 1.95 A after a full relaxation, per nudge_apart's
+# docstring). Narrowed to bisector only so a placement-tuning pass (DIAGONAL_NUDGE) doesn't
+# re-pay the cost of relaxing all 4 modes for every model.
+MODES_TO_RUN = ("bisector",)
 
 
 def _rotation_aligning(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -225,6 +256,21 @@ def orient_toward(
     return oriented
 
 
+def translate_toward(
+    structure: Structure, anchor_idx: int, n_ads: int, target_dir: np.ndarray, distance: float,
+) -> Structure:
+    """Rigidly translate the whole fragment (O and every H) by ``distance`` along
+    ``target_dir``. Unlike ``orient_toward``, which only rotates the H's about a fixed O,
+    this moves the O itself -- see DIAGONAL_NUDGE's own comment for why that's the piece
+    rotation alone can't fix. Every internal O-H bond length and H-O-H angle is preserved
+    (a pure translation of every atom by the same vector); only the rigid body's position
+    relative to the surface changes."""
+    translated = structure.copy()
+    for k in range(anchor_idx, anchor_idx + n_ads):
+        translated[k].coords = structure[k].coords + distance * target_dir
+    return translated
+
+
 def is_dissociated(structure: Structure, h_idx: int, o_water_idx: int, o2c_idx: int) -> bool:
     """True once the oriented H has left the water oxygen's bonding range and entered the
     bridging O2c's -- i.e. a real O-H bond broke and a new one formed, not just a stretch
@@ -259,9 +305,11 @@ def nudge_apart(
     return nudged
 
 
-def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) -> "dict | None":
+def run_one(
+    model: str, oxide: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False,
+) -> "dict | None":
     backend = get_backend(model)
-    odir = outdir / model
+    odir = outdir / oxide / model
 
     def relax_record(structure, stage, source_desc, relax_cell=False):
         out = pipeline._relax_record(
@@ -273,8 +321,8 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
               f"{out.elapsed_s:.0f}s", flush=True)
         return out
 
-    print(f"[{model}]", flush=True)
-    start = get_structure(MP_ID)
+    print(f"[{oxide} / {model}]", flush=True)
+    start = get_structure(OXIDES[oxide])
     bulk = relax_record(start, "bulk", "db", relax_cell=True).structure
     slab_in = make_slab(bulk, cfg.slab)
     slab_out = relax_record(slab_in, "slab", "cut_from_relaxed_bulk")
@@ -307,8 +355,14 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
     target_dir = target_dir / np.linalg.norm(target_dir)
 
     rows = []
-    for mode in ORIENTATION_MODES:
+    for mode in MODES_TO_RUN:
         oriented = orient_toward(cand.structure, anchor_idx, n_ads, target_dir, mode=mode)
+        oriented = translate_toward(oriented, anchor_idx, n_ads, target_dir, DIAGONAL_NUDGE)
+        start_o_ti = oriented.get_distance(anchor_idx, ti_idx)
+        start_h_o2c = oriented.get_distance(h_near_idx, o2c_idx)
+        print(f"    [{mode}] after {DIAGONAL_NUDGE} A nudge: O-Ti={start_o_ti:.3f} A, "
+              f"H...O2c={start_h_o2c:.3f} A (pristine Ti-O2c was "
+              f"{pristine_structure.get_distance(ti_idx, o2c_idx):.3f} A)", flush=True)
 
         if dump_frame:
             frame_path = odir / "adsorbate" / mode / "starting_frame.vasp"
@@ -345,7 +399,7 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
               f"dE_from_nudge={e_ads_nudged - e_ads:+.4f} eV", flush=True)
 
         rows.append({
-            "model": model, "orientation": mode, "ti_idx": ti_idx, "o2c_idx": o2c_idx,
+            "model": model, "oxide": oxide, "orientation": mode, "ti_idx": ti_idx, "o2c_idx": o2c_idx,
             "e_ads_eV": e_ads, "dissociated": dissociated,
             "converged": res.converged, "nsteps": res.nsteps,
             "e_ads_nudged_eV": e_ads_nudged, "dissociated_nudged": dissociated_nudged,
@@ -356,25 +410,47 @@ def run_one(model: str, outdir: Path, cfg: RunConfig, dump_frame: bool = False) 
     return rows or None
 
 
-def main(outdir: Path, models: list[str], dump_frame: bool) -> None:
+def main(outdir: Path, oxides: list[str], models: list[str], dump_frame: bool) -> None:
     cfg = RunConfig()
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=FMAX))
     outdir.mkdir(parents=True, exist_ok=True)
     results_path = outdir / "results.jsonl"
-    for model in models:
-        rows = run_one(model, outdir, cfg, dump_frame=dump_frame)
-        if not rows:
-            continue
-        with results_path.open("a") as f:
-            for row in rows:
-                f.write(json.dumps(row) + "\n")
+    # Per-pair try/except so one bad (oxide, model) -- OOM, a model's own loader error,
+    # anything -- doesn't silently kill every pair queued after it with zero record of
+    # why (the earlier failure mode: an uncaught exception here took the whole script
+    # down mid-sweep and results.jsonl just stopped, with nothing in it saying where or
+    # why). Matches o_adsorption_benchmark.py's pair_failures pattern.
+    pair_failures: list[str] = []
+    for oxide in oxides:
+        for model in models:
+            tag = f"{oxide}/{model}"
+            try:
+                rows = run_one(model, oxide, outdir, cfg, dump_frame=dump_frame)
+            except Exception as e:
+                print(f"  [{tag}] PAIR FAILED: {e}", flush=True)
+                pair_failures.append(f"{tag}: {str(e)[:300]}")
+                rows = [{
+                    "model": model, "oxide": oxide, "orientation": None, "failed": True,
+                    "error": f"{e}"[:2000], "e_ads_eV": None, "dissociated": None,
+                    "converged": None, "nsteps": None,
+                }]
+            if not rows:
+                continue
+            with results_path.open("a") as f:
+                for row in rows:
+                    f.write(json.dumps(row) + "\n")
     if not dump_frame:
         print(f"\nwrote {results_path}")
+    if pair_failures:
+        print(f"\n{len(pair_failures)} pair(s) failed:")
+        for p in pair_failures:
+            print(f"  {p}")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("outdir", type=Path)
+    ap.add_argument("--oxides", nargs="+", default=list(OXIDES), choices=list(OXIDES))
     ap.add_argument("--models", nargs="+", default=MODELS, choices=MODELS)
     ap.add_argument(
         "--dump-frame", action="store_true",
@@ -382,4 +458,4 @@ if __name__ == "__main__":
              "relaxation, for a visual check (e.g. in OVITO) before committing to a run.",
     )
     a = ap.parse_args()
-    main(a.outdir, a.models, a.dump_frame)
+    main(a.outdir, a.oxides, a.models, a.dump_frame)
