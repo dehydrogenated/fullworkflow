@@ -83,9 +83,34 @@ def build_series(latest: dict[tuple, dict]) -> dict:
     return out
 
 
+def compute_stats(latest: dict[tuple, dict]) -> dict:
+    """{adsorbate: {model: {mae, rmse, n}}} vs. lit_e_ads_eV, converged rows only -- a
+    not-converged point's energy isn't a verified value to score a model against, but a
+    converged-and-desorbing one still counts (the model really did predict that number;
+    excluding it would flatter a model whose failure mode is desorption, not hide it)."""
+    stats: dict = {"O": {}, "OH": {}}
+    models = sorted({k[0] for k in latest if k[0]})
+    for adsorbate in ("O", "OH"):
+        for model in models:
+            errors = []
+            for (m, _oxide, _facet, ads), r in latest.items():
+                if m != model or ads != adsorbate:
+                    continue
+                if not r.get("converged") or r.get("e_ads_eV") is None or r.get("lit_e_ads_eV") is None:
+                    continue
+                errors.append(r["e_ads_eV"] - r["lit_e_ads_eV"])
+            if errors:
+                n = len(errors)
+                mae = sum(abs(e) for e in errors) / n
+                rmse = (sum(e * e for e in errors) / n) ** 0.5
+                stats[adsorbate][model] = {"mae": round(mae, 4), "rmse": round(rmse, 4), "n": n}
+    return stats
+
+
 def main(out_path: Path, in_paths: list[Path]) -> None:
     latest = load_rows(in_paths)
     data = build_series(latest)
+    data["stats"] = compute_stats(latest)
     data["generated_from"] = [str(p) for p in in_paths]
     data["row_count"] = len(latest)
     out_path.write_text(json.dumps(data, indent=None, separators=(",", ":")))

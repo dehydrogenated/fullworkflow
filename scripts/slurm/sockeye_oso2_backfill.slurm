@@ -1,6 +1,7 @@
 #!/bin/bash
-#SBATCH --account=st-akkiraju-1
-#SBATCH --partition=cascade
+#SBATCH --account=st-akkiraju-1-gpu
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -12,19 +13,29 @@
 #
 # Backfills OsO2 across all 15 models, both facets, both adsorbates -- the
 # undercoordinated_metal_site() fix (commit "Fix undercoordinated_metal_site() dropping Os
-# sites as if they were oxygen") landed after the main 5d sweep and the CHGNet/Orb-v2 CPU
-# backfill were already running with old code, so every model that reaches OsO2 in either
-# of those jobs will still hit "no metal ontop site found" until this reruns it fresh. Not
-# model-specific -- undercoordinated_metal_site() is pure geometry, called identically
-# regardless of backend, so this affects every model that gets to OsO2's site-finding step,
-# not just MACE-mh1-omat (which just happened to be first in line).
+# sites as if they were oxygen") landed after the main 5d sweep started, so any model that
+# reached OsO2 with old code still hit "no metal ontop site found". Not model-specific --
+# undercoordinated_metal_site() is pure geometry, called identically regardless of backend.
 #
-# Points at runs/mo2_sweep_5d -- the SAME directory the main 5d sweep already writes to --
-# so bulk/slab resumes automatically wherever a model already got that far (pipeline._resume,
-# same mechanism as the extension-fix retest and the CHGNet/Orb-v2 backfill). Only the
-# adsorbate leg, which always relaxes fresh, spends new compute. Tiny scope: 1 oxide x 2
-# facets x 15 models x 4 relaxations = 120 relaxations max, most far fewer once resume kicks
-# in -- CPU is plenty, no need to fight the GPU queue for this.
+# GPU now, for every model -- the orb/chgnet torch cu126 reinstall (see
+# sockeye_orb_chgnet_gpu_smoke.slurm) closed the last gap; every model in MODELS below has a
+# confirmed-working CUDA path as of 2026-08-20.
+#
+# Deliberately its OWN output folder (runs/oso2_gpu_backfill), NOT runs/mo2_sweep_5d --
+# the main 5d sweep job is still actively running (on SevenNet as of this writing) and
+# actively appending to that directory's results.jsonl. Concurrent appends to the same file
+# are safe (confirmed earlier this session, POSIX atomic small-write semantics), but a
+# separate directory means this job doesn't touch bulk/slab CONTCARs the main job might still
+# be reading/writing for OTHER oxides in the same row, and keeps this run's own output
+# trivially inspectable in isolation while both are in flight. Costs a bit of extra compute
+# (bulk+slab redone from scratch per model rather than resumed via pipeline._resume, since
+# there's no prior OsO2 output in this fresh directory) -- fine, OsO2 is a single oxide and
+# GPU makes the whole thing cheap regardless.
+#
+# Merge afterward: concatenate this directory's results.jsonl onto mo2_sweep_5d's own, same
+# last-row-wins dedup rule used everywhere else this session --
+#   cat runs/oso2_gpu_backfill/results.jsonl >> runs/mo2_sweep_5d/results.jsonl
+# (or dedupe at read time instead of physically merging, same effect either way).
 #
 # PREREQUISITES:
 #   1. Repo up to date: git pull origin main (needs the Os fix commit)
@@ -46,10 +57,9 @@ export TRANSFORMERS_OFFLINE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
-# nvidia-smi, not CUDA_VISIBLE_DEVICES -- that env var is inherited from the submitting
-# shell by sbatch's default --export=ALL, so a stray value from an earlier interactive GPU
-# session can make a --partition=cascade job (no --gres=gpu) wrongly resolve to cuda. See
-# sockeye_job.sh for the full incident. nvidia-smi respects SLURM's cgroup isolation instead.
+# nvidia-smi, not CUDA_VISIBLE_DEVICES -- see sockeye_job.sh for the full incident. This job
+# requests a GPU (--gres=gpu:1 above), so this should resolve to cuda; if it prints
+# "device cpu" instead, that's a scheduling problem to chase down first.
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
     export OXW_DEVICE=cuda
 else
@@ -82,16 +92,16 @@ MODELS=(
     eSEN-30M-OAM
 )
 
-OUT="$SLURM_SUBMIT_DIR/runs/mo2_sweep_5d"
-test -d "$OUT" || {
-    echo "missing $OUT -- this resumes bulk/slab from the main 5d sweep's own output, run that first" >&2
-    exit 1
-}
+OUT="$SLURM_SUBMIT_DIR/runs/oso2_gpu_backfill"
+mkdir -p "$OUT"
 
 python "$REPO/scripts/ClaudeScripts/mo2_adsorption_benchmark.py" "$OUT" \
     --oxides OsO2 --facets 110 100 --adsorbates O OH \
     --models "${MODELS[@]}" --fmax 0.02 "$@"
 
 echo
-echo "appended to: $OUT/results.jsonl (dedupe by keeping the LAST row per"
-echo "  (model, oxide, facet, adsorbate) alongside the main 5d sweep's own rows)"
+echo "results in: $OUT/results.jsonl"
+echo "merge into the main 5d sweep on the LOGIN node once both are done:"
+echo "    cat $OUT/results.jsonl >> \$PROJECT/runs/mo2_sweep_5d/results.jsonl"
+echo "(or just pass both files to any script that already dedupes by last-row-wins, e.g."
+echo " periodic_trend_report.py -- no physical merge required)"
