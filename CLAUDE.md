@@ -120,8 +120,17 @@ Adsorbates are placed at approximately the covalent bond length above the surfac
 Key paths:
 - `PROJECT=/arc/project/st-akkiraju-1/ssong18` — durable storage; this repo lives at `$PROJECT/fullworkflow`
 - `/scratch/st-akkiraju-1/$USER` — fast, purged-on-a-timer scratch; **all job output must land here**, never `/arc/project`
-- `$PROJECT/miniforge3` — conda base (`OXW_CONDA_BASE`); envs include `oxw` (orchestrator, has `oxide_workflow`+pymatgen installed editable) plus one per model (`mace-clean`, `fairchem`, ...)
-- `$PROJECT/models` — checkpoints (`OXW_MODEL_DIR`): `mace-mh-1.model`, `uma-s-1p2.pt`
+- `$PROJECT/miniforge3` — conda base (`OXW_CONDA_BASE`). Verified via `conda env list` on
+  the login node (2026-08-19): `oxw` (orchestrator, has `oxide_workflow`+pymatgen installed
+  editable), `mace-clean`, `fairchem`, `sevenn`. **Not yet created: `orb`, `chgnet`, `esen`**
+  — each model's env is created fresh with `conda create -n <name> python=3.11` then
+  `pip install <package> ase` from the login node (needs network; compute nodes have none).
+  Don't assume an env exists from this list without rechecking — it was wrong before
+  (assumed `sevenn` was missing; it wasn't) and will drift again as more models get added.
+- `$PROJECT/models` — checkpoints (`OXW_MODEL_DIR`): `mace-mh-1.model`, `uma-s-1p2.pt`, plus
+  whatever's been hand-uploaded since (orb-v2-20241011.ckpt, esen_30m_oam.pt as of
+  2026-08-19 per Sean) — verify presence on the login node before relying on any of these,
+  same reasoning as the env list above.
 
 Watch out: the home-ish project dir and the scratch dir both end in `ssong18` as their last path component — easy to be in the wrong one without noticing. Run `pwd` before trusting a relative `cd`; prefer absolute paths.
 
@@ -155,7 +164,7 @@ scancel -u $USER                                          # cancel everything yo
 Every job script (`sockeye_job.sh`, `sockeye_oc22.sh`, `sockeye_co2_retest.slurm`) carries the same environment contract, since compute nodes are far more restricted than the login node:
 
 - **No outbound network** — `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1` stop anything that would try to reach out at runtime from hanging until the walltime runs out instead of failing fast. Checkpoints and pip installs have to be pre-staged from a login node beforehand.
-- **`$HOME` and `/arc/project` are read-only on compute nodes** — only `/scratch` is writable. Any library that caches under `$HOME` by default (triton, torch inductor, huggingface, matplotlib via pymatgen, fairchem separately since it ignores `XDG_CACHE_HOME`) has to be redirected there or it crashes mid-run — see any job script's cache-redirection block for the exact env vars.
+- **`$HOME` and `/arc/project` are read-only on compute nodes** — only `/scratch` is writable. Any library that caches under `$HOME` by default (triton, torch inductor, huggingface, matplotlib via pymatgen, fairchem separately since it ignores `XDG_CACHE_HOME`, `cached_path` — pulled in by `orb-models`, ignores `XDG_CACHE_HOME` too and needs its own `CACHED_PATH_CACHE_ROOT`, confirmed via an actual `OSError: Read-only file system` on Sockeye, not assumed) has to be redirected there or it crashes mid-run — see any job script's cache-redirection block for the exact env vars. `cached_path` bit even when Orb-v2's `weights_path` pointed at an already-staged *local* checkpoint file — it unconditionally tries to create its cache directory before ever checking whether the path is local or remote, so passing a local file doesn't skip this.
 - **Device detection from the scheduler, not a hardcoded flag** — `OXW_DEVICE` is set by checking whether `CUDA_VISIBLE_DEVICES` is actually populated, so a forgotten `--gres=gpu` fails loudly (wrong device) instead of silently paying for a GPU node and running on its CPUs.
 - **Results land in scratch, not `/arc/project`** — scratch is purged on a timer, so every job script prints an `rsync` command at the end to copy results into `$PROJECT/runs/` for durable storage. That copy can only be run from the **login node**; `/arc/project` is read-only from inside a compute-node job.
 

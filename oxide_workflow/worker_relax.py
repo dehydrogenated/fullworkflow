@@ -82,6 +82,16 @@ def build_calculator(spec: dict):
             model=spec["model_path"], modal=spec.get("task", "mpa"),
             device=spec.get("device", "cpu"), enable_cueq=False, enable_flash=False,
         )
+    if loader == "esen":
+        from fairchem.core.common.relaxation.ase_utils import OCPCalculator
+
+        # Pre-restructuring fairchem API (fairchem-core==1.10.0 in the "esen" env, not the
+        # "fairchem" env's 2.x) -- the only one that reads this checkpoint's legacy format.
+        # OCPCalculator is a plain ASE Calculator (populates self.results directly), so
+        # nothing else about this worker's relax loop needs to know it's a different API.
+        return OCPCalculator(
+            checkpoint_path=spec["model_path"], cpu=(spec.get("device", "cpu") != "cuda"),
+        )
     raise ValueError(f"unknown loader: {loader!r}")
 
 

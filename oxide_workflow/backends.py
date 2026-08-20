@@ -253,6 +253,23 @@ def _sevennet(name: str, modal: str, labels: tuple[str, ...]) -> Backend:
     )
 
 
+# eSEN-30M-OAM (env: esen, its own conda env -- see scripts/slurm job comments for setup).
+# The public checkpoint at huggingface.co/facebook/OMAT24 (esen_30m_oam.pt, HF-gated,
+# separate license from UMA's) is in fairchem's *legacy* checkpoint format (raw dict with
+# state_dict/normalizers/config/ema keys) -- the current fairchem-core (2.21.0, what the
+# "fairchem" env runs) dropped the loader for that format when it introduced the unified
+# MLIPPredictUnit API; even its own bundled migrate_checkpoint.py script fails on it (a
+# *third*, intermediate format, not what this checkpoint has -- confirmed by hand, not
+# assumed). The one thing that does load it is the pre-restructuring OCPCalculator, which
+# only exists in fairchem-core versions before that rewrite -- hence a separate "esen" env
+# pinned to fairchem-core==1.10.0 (the last v1 release) rather than reusing "fairchem".
+ESEN_CKPT = str(MODEL_DIR / "esen_30m_oam.pt")
+
+
+def _esen(name: str, labels: tuple[str, ...]) -> Backend:
+    return Backend(name=name, env="esen", loader="esen", model_path=ESEN_CKPT, training_labels=labels)
+
+
 REGISTRY: dict[str, Backend] = {
     # ---- MACE mace-mh-1 heads (mace_test.py: the model's real heads) --------------------
     # Reference: the OMat24 PBE head (bulk-mat, mixed-Hamiltonian) — the updated OMat24.
@@ -288,6 +305,8 @@ REGISTRY: dict[str, Backend] = {
     "SevenNet-omni-oc20": _sevennet("SevenNet-omni-oc20", "oc20", ("OC20", "cat")),
     "SevenNet-omni-omat24": _sevennet("SevenNet-omni-omat24", "omat24", ("OMat24", "bulk-mat")),
     "SevenNet-omni-mpa": _sevennet("SevenNet-omni-mpa", "mpa", ("MPtrj+Alexandria", "PBE")),
+    # ---- eSEN (env: esen) ------------------------------------------------------------------
+    "eSEN-30M-OAM": _esen("eSEN-30M-OAM", ("OMat24+sAlex+MPtrj", "PBE")),
 }
 
 # Convenience groupings for candidate sweeps (every head/task/checkpoint, minus the reference).

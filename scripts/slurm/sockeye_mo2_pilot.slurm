@@ -54,8 +54,9 @@ export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
 export HF_HOME="$XDG_CACHE_HOME/huggingface"
 export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
 export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
+export CACHED_PATH_CACHE_ROOT="$XDG_CACHE_HOME/cached_path"  # orb-models' own cache lib -- ignores XDG_CACHE_HOME, has its own var
 mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
-         "$FAIRCHEM_CACHE_DIR"
+         "$FAIRCHEM_CACHE_DIR" "$CACHED_PATH_CACHE_ROOT"
 
 source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate oxw
@@ -63,6 +64,15 @@ conda activate oxw
 cd "$SLURM_SUBMIT_DIR"
 
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
+
+test -d "$OXW_CONDA_BASE/envs/orb" || {
+    echo "missing conda env: $OXW_CONDA_BASE/envs/orb -- create it first (orb-models, ase)" >&2
+    exit 1
+}
+test -f "$OXW_MODEL_DIR/orb-v2-20241011.ckpt" || {
+    echo "missing checkpoint: $OXW_MODEL_DIR/orb-v2-20241011.ckpt" >&2
+    exit 1
+}
 
 OUT="$SLURM_SUBMIT_DIR/runs/mo2_pilot_sockeye"
 # Extra sbatch args after the script path forward straight through, e.g.:

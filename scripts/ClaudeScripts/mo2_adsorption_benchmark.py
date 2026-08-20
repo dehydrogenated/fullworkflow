@@ -57,7 +57,9 @@ DESORB_CHECK_STEP = 200  # see module docstring -- o_adsorption_benchmark.py's 1
 from oxide_workflow import pipeline  # noqa: E402
 from oxide_workflow.backends import get_backend, relax  # noqa: E402
 from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig  # noqa: E402
-from oxide_workflow.energetics import adsorption_energy, gas_reference_energy  # noqa: E402
+from oxide_workflow.energetics import (  # noqa: E402
+    WATER_FORMATION_ENTHALPY_EXP, adsorption_energy, gas_reference_energy,
+)
 from oxide_workflow.pipeline import _adsorbate_anchor_distance, _cli_miller  # noqa: E402
 from oxide_workflow.stages import adsorbate_candidates, make_slab  # noqa: E402
 from oxide_workflow.structures import STRUCTURE_DIR, get_structure  # noqa: E402
@@ -131,8 +133,13 @@ def recenter_on_anchor(structure, anchor_idx: int):
     return structure
 
 
-def run_one(model: str, oxide: str, facet: str, adsorbate: str, mp_id: str,
-            outdir: Path, cfg: RunConfig, lit: dict, desorb_check_step: int) -> dict:
+def relax_bulk_slab(model: str, oxide: str, facet: str, mp_id: str, outdir: Path, cfg: RunConfig):
+    """Bulk + slab relaxation for one (model, oxide, facet) -- shared by every adsorbate in
+    that facet, since O* and OH* start from the identical pristine slab. Splitting this out
+    of what used to be run_one() avoids literally re-relaxing the same slab twice per facet
+    (once per adsorbate) -- at the 33-oxide x ~12-model scale this is a real amount of
+    duplicated compute, not a micro-optimization (slab relaxation alone ran up to ~280s for
+    a single case earlier in this project's own timing logs)."""
     backend = get_backend(model)
     odir = outdir / oxide / facet
 
@@ -146,13 +153,20 @@ def run_one(model: str, oxide: str, facet: str, adsorbate: str, mp_id: str,
               f"{out.elapsed_s:.0f}s", flush=True)
         return out
 
-    print(f"  [{model} / {oxide} / {facet} / {adsorbate}]", flush=True)
+    print(f"  [{model} / {oxide} / {facet}]", flush=True)
     start = get_structure(mp_id)
     bulk = relax_record(start, "bulk", "db", relax_cell=True).structure
     slab_in = make_slab(bulk, cfg.slab)
     slab_out = relax_record(slab_in, "slab", "cut_from_relaxed_bulk")
-    pristine_energy = slab_out.energy
-    pristine_structure = slab_out.structure
+    return slab_out.structure, slab_out.energy
+
+
+def run_adsorbate(model: str, oxide: str, facet: str, adsorbate: str,
+                   pristine_structure, pristine_energy: float,
+                   outdir: Path, cfg: RunConfig, lit: dict, desorb_check_step: int) -> dict:
+    backend = get_backend(model)
+    odir = outdir / oxide / facet
+    print(f"    -> {adsorbate}", flush=True)
 
     ads_species, ads_coords = ADSORBATE_FRAGMENTS[adsorbate]
     n_ads = len(ads_species)
@@ -162,21 +176,39 @@ def run_one(model: str, oxide: str, facet: str, adsorbate: str, mp_id: str,
     e_h2o = gas_reference_energy(backend, cfg, pipeline.relax, species=h2o_species, coords=h2o_coords)
     # Comer et al. Table S3: O* against full H2 splitting, HO* against half (one H stays put).
     e_ads_ref = e_h2o - e_h2 if adsorbate == "O" else e_h2o - 0.5 * e_h2
+    # GGA-class functionals overbind O2 specifically -- O*'s reference implicitly consumes
+    # one O2-equivalent, so it's worth correcting via the same H2/H2O thermodynamic cycle
+    # oxygen_chemical_potential_corrected() uses for vacancies (Kowalski, Meyer & Marx 2009).
+    # OH*'s reference (H2O - 0.5 H2) never touches O2 at all, so there's nothing to correct
+    # there -- same reasoning as H*/CO*/H2O* not needing this. Keeping both e_ads_ref and
+    # e_ads_ref_corrected (rather than replacing) so the literature comparison, which uses
+    # Comer's own uncorrected convention, stays valid alongside the corrected one.
+    e_ads_ref_corrected = (
+        e_ads_ref + WATER_FORMATION_ENTHALPY_EXP if adsorbate == "O" else e_ads_ref
+    )
 
     candidates = adsorbate_candidates(
         pristine_structure, cfg.adsorbate, freeze_bottom_fraction=cfg.slab.freeze_bottom_fraction,
     )
     lit_row = lit.get((oxide, facet, adsorbate))
+    # Shared null-out for both failure paths below, so every row (converged or not) has the
+    # same keys -- downstream analysis never needs to special-case a missing key.
+    null_result_fields = {
+        "e_ads_eV": None, "e_ads_corrected_eV": None, "bond_A": None,
+        "e_slab_ads_eV": None, "e_slab_pristine_eV": pristine_energy,
+        "e_gas_ref_eV": e_ads_ref, "e_gas_ref_corrected_eV": e_ads_ref_corrected,
+        "desorbing": None, "desorbing_early_stop": None, "desorbing_final_geometry": None,
+        "trivial_start": None, "start_fmax": None, "extended": None, "extensions_used": None,
+        "converged": None, "nsteps": None, "elapsed_s": None, "s_per_step": None,
+    }
     row = {
         "model": model, "oxide": oxide, "facet": facet, "adsorbate": adsorbate,
         "lit_e_ads_eV": lit_row["delta_E_ads_eV"] if lit_row else None,
         "lit_g_ads_eV": lit_row["delta_G_ads_eV"] if lit_row else None,
     }
     if not candidates:
-        row.update({
-            "site": None, "failed": True, "error": "no adsorbate candidates for this facet",
-            "e_ads_eV": None, "bond_A": None, "desorbing": None, "converged": None, "nsteps": None,
-        })
+        row.update(null_result_fields)
+        row.update({"site": None, "failed": True, "error": "no adsorbate candidates for this facet"})
         print(f"    NO SITES for facet {facet}", flush=True)
         return row
 
@@ -194,14 +226,19 @@ def run_one(model: str, oxide: str, facet: str, adsorbate: str, mp_id: str,
             extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
         )
     except Exception as e:
-        row.update({
-            "failed": True, "error": str(e)[:500], "e_ads_eV": None, "bond_A": None,
-            "desorbing": None, "converged": None, "nsteps": None,
-        })
+        row.update(null_result_fields)
+        # 4000, not 500 -- matches backends.py's own stderr cap (proc.stderr[-4000:]), so a
+        # worker traceback survives into the persistent record instead of needing a second
+        # re-truncation on top of the first (confirmed this mattered: an early Orb-v2 Sockeye
+        # failure was undiagnosable from results.jsonl alone at 500 chars, needed the raw
+        # slurm .out file to find the real OSError under the truncated stack trace).
+        row.update({"failed": True, "error": str(e)[:4000]})
         print(f"    RELAX FAILED: {row['error'][:200]}", flush=True)
         return row
 
     e_ads = adsorption_energy(res.energy, pristine_energy, e_ads_ref)
+    e_ads_corrected = adsorption_energy(res.energy, pristine_energy, e_ads_ref_corrected)
+    elapsed_s = res.meta.get("elapsed_s")
     end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
     early_stopped = bool(res.meta.get("early_stopped_desorbing"))
     desorbed_final = (
@@ -210,17 +247,26 @@ def run_one(model: str, oxide: str, facet: str, adsorbate: str, mp_id: str,
     desorbing = early_stopped or desorbed_final
     trivial_start = res.start_fmax <= TRIVIAL_START_TOL * cfg.relax.fmax
     row.update({
-        "failed": False, "error": None, "e_ads_eV": e_ads, "bond_A": end_dist,
+        "failed": False, "error": None, "e_ads_eV": e_ads, "e_ads_corrected_eV": e_ads_corrected,
+        "bond_A": end_dist,
+        # The three raw terms E_ads is built from: E(substrate+adsorbate), E(bare substrate),
+        # E(isolated gas fragment) -- both the Comer-matching raw gas ref and the
+        # ΔHf-corrected one, so e_ads_eV/e_ads_corrected_eV are independently reproducible
+        # from these without re-running anything.
+        "e_slab_ads_eV": res.energy, "e_slab_pristine_eV": pristine_energy,
+        "e_gas_ref_eV": e_ads_ref, "e_gas_ref_corrected_eV": e_ads_ref_corrected,
         "desorbing": desorbing, "desorbing_early_stop": early_stopped,
         "desorbing_final_geometry": desorbed_final, "trivial_start": trivial_start,
         "start_fmax": res.start_fmax, "extended": bool(res.meta.get("extended")),
         "extensions_used": res.meta.get("extensions_used", 0),
         "converged": res.converged, "nsteps": res.nsteps,
+        "elapsed_s": elapsed_s, "s_per_step": elapsed_s / res.nsteps if elapsed_s and res.nsteps else None,
     })
     status = "DESORBING" if desorbing else ("EXTENDED" if row["extended"] else "OK")
     lit_str = f"{row['lit_e_ads_eV']:+.2f}" if row["lit_e_ads_eV"] is not None else "n/a"
+    s_per_step_str = f"{row['s_per_step']:.2f}" if row["s_per_step"] else "n/a"
     print(f"    E_ads={e_ads:+.4f} eV (lit {lit_str})  bond={end_dist:.3f} A  {status}  "
-          f"nsteps={res.nsteps}", flush=True)
+          f"nsteps={res.nsteps}  {elapsed_s:.0f}s ({s_per_step_str} s/step)", flush=True)
     return row
 
 
@@ -261,6 +307,25 @@ def main(
                 continue
             for facet in facets:
                 fcfg = replace(cfg, slab=replace(cfg.slab, miller_index=_cli_miller(facet)))
+                slab_tag = f"{model}/{oxide}/{facet}"
+                try:
+                    pristine_structure, pristine_energy = relax_bulk_slab(
+                        model, oxide, facet, mp_id, outdir, fcfg,
+                    )
+                except Exception as e:
+                    print(f"  [{slab_tag}] PAIR FAILED before relax: {e}", flush=True)
+                    pair_failures.append(f"{slab_tag}: {str(e)[:300]}")
+                    for adsorbate in adsorbates:
+                        row = {
+                            "model": model, "oxide": oxide, "facet": facet, "adsorbate": adsorbate,
+                            "site": None, "failed": True, "error": f"pair-level (bulk/slab): {e}"[:4000],
+                            "e_ads_eV": None, "bond_A": None, "desorbing": None,
+                            "converged": None, "nsteps": None,
+                        }
+                        with results_path.open("a") as f:
+                            f.write(json.dumps(row) + "\n")
+                    continue
+
                 for adsorbate in adsorbates:
                     species, coords = ADSORBATE_FRAGMENTS[adsorbate]
                     if adsorbate == "OH":
@@ -270,16 +335,16 @@ def main(
                     ))
                     tag = f"{model}/{oxide}/{facet}/{adsorbate}"
                     try:
-                        row = run_one(
-                            model, oxide, facet, adsorbate, mp_id, outdir, acfg, lit,
-                            desorb_check_step,
+                        row = run_adsorbate(
+                            model, oxide, facet, adsorbate, pristine_structure, pristine_energy,
+                            outdir, acfg, lit, desorb_check_step,
                         )
                     except Exception as e:
                         print(f"  [{tag}] PAIR FAILED before relax: {e}", flush=True)
                         pair_failures.append(f"{tag}: {str(e)[:300]}")
                         row = {
                             "model": model, "oxide": oxide, "facet": facet, "adsorbate": adsorbate,
-                            "site": None, "failed": True, "error": f"pair-level: {e}"[:500],
+                            "site": None, "failed": True, "error": f"pair-level: {e}"[:4000],
                             "e_ads_eV": None, "bond_A": None, "desorbing": None,
                             "converged": None, "nsteps": None,
                         }

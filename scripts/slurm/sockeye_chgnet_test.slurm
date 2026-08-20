@@ -5,20 +5,26 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=8:00:00
-#SBATCH --job-name=o-ads-bench
+#SBATCH --time=4:00:00
+#SBATCH --job-name=chgnet-test
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #
-# O-atom adsorption vs. Zhao & Kulik (JPCL 2019, 10, 5090) -- MACE-mh1-omat, UMA-omat,
-# UMA-oc22 x 7 rutile oxides (Ti, V, Mo, Ru, Rh, Ir, Pt), single ontop-metal site each.
-# See scripts/ClaudeScripts/o_adsorption_benchmark.py for the rationale. Submit from /scratch:
+# Smoke test for CHGNet-0.3.0 on a freshly-created "chgnet" env (pip install chgnet==0.4.2).
+# No separate checkpoint file to stage here, unlike Orb/UMA/eSEN: the 0.3.0 pretrained
+# weights ship bundled inside the pip package itself (site-packages/chgnet/pretrained/
+# 0.3.0/), so a successful `pip install` on the login node already fully stages it -- the
+# only thing worth checking before running is that the env exists at all.
+#
+# Deliberately tiny: TiO2 only, both facets, both adsorbates -- 4 legs, not the full
+# 33-oxide sweep.
+#
+# PREREQUISITES:
+#   1. Repo up to date: git pull origin main
+#   2. "chgnet" env exists with chgnet==0.4.2 + ase installed
 #
 #   cd /scratch/st-akkiraju-1/$USER
-#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_o_ads_benchmark.slurm
-#
-#   sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=3:00:00 \
-#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_o_ads_benchmark.slurm
+#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_chgnet_test.slurm
 
 set -euo pipefail
 
@@ -57,28 +63,19 @@ cd "$SLURM_SUBMIT_DIR"
 
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
 
-test -f "$OXW_MODEL_DIR/mace-mh-1.model" || {
-    echo "missing checkpoint: $OXW_MODEL_DIR/mace-mh-1.model" >&2
+test -d "$OXW_CONDA_BASE/envs/chgnet" || {
+    echo "missing conda env: $OXW_CONDA_BASE/envs/chgnet -- create it first (chgnet==0.4.2, ase)" >&2
     exit 1
 }
-test -f "$OXW_MODEL_DIR/uma-s-1p2.pt" || {
-    echo "missing checkpoint: $OXW_MODEL_DIR/uma-s-1p2.pt" >&2
-    exit 1
-}
-# Optional extras -- only fatal if you actually pass a --models flag that needs them.
-test -f "$OXW_MODEL_DIR/sevennet-omni.pth" || echo "note: sevennet-omni.pth not staged (needed for SevenNet-omni-* models)"
-test -f "$OXW_MODEL_DIR/uma-m-1p1.pt" || echo "note: uma-m-1p1.pt not staged (needed for UMA-M-* models)"
 
-OUT="$SLURM_SUBMIT_DIR/runs/o_ads_benchmark"
-# Extra sbatch args after the script path forward straight through, e.g.:
-#   sbatch sockeye_o_ads_benchmark.slurm --models UMA-oc20 MACE-mh1-oc20
-python "$REPO/scripts/ClaudeScripts/o_adsorption_benchmark.py" "$OUT" --fmax 0.02 "$@"
-
-echo
-python "$REPO/scripts/ClaudeScripts/o_ads_report.py" "$OUT"
+OUT="$SLURM_SUBMIT_DIR/runs/chgnet_test"
+python "$REPO/scripts/ClaudeScripts/mo2_adsorption_benchmark.py" "$OUT" \
+    --oxides TiO2 --facets 110 100 --adsorbates O OH --models CHGNet-0.3.0 --fmax 0.02 "$@"
 
 echo
 echo "results in scratch: $OUT/results.jsonl"
 echo "to keep them, run this on the LOGIN node (scratch is purged on a timer):"
-D="$PROJECT/runs/$(date +%Y%m%d-%H%M%S)_o_ads_benchmark"
+D="$PROJECT/runs/$(date +%Y%m%d-%H%M%S)_chgnet_test"
 echo "    mkdir -p $D && rsync -a $OUT/ $D/ && cp $SLURM_SUBMIT_DIR/slurm-${SLURM_JOB_ID}.{out,err} $D/"
+echo "then pull it to your laptop with:"
+echo "    scripts/slurm/sync_sockeye_runs.sh $(basename "$D")"

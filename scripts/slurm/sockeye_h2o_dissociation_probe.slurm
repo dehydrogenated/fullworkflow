@@ -63,8 +63,9 @@ export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
 export HF_HOME="$XDG_CACHE_HOME/huggingface"
 export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
 export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
+export CACHED_PATH_CACHE_ROOT="$XDG_CACHE_HOME/cached_path"  # orb-models' own cache lib -- ignores XDG_CACHE_HOME, has its own var
 mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
-         "$FAIRCHEM_CACHE_DIR"
+         "$FAIRCHEM_CACHE_DIR" "$CACHED_PATH_CACHE_ROOT"
 
 source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
 conda activate oxw
