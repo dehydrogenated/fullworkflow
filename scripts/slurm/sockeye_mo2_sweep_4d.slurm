@@ -101,7 +101,8 @@ python "$REPO/scripts/ClaudeScripts/mo2_adsorption_benchmark.py" "$OUT" \
 echo
 echo "results in scratch: $OUT/results.jsonl"
 echo "to keep them, run this on the LOGIN node (scratch is purged on a timer):"
-D="$PROJECT/runs/$(date +%Y%m%d-%H%M%S)_mo2_sweep_4d"
+D="$PROJECT/runs/mo2_sweep_4d"  # fixed name (no timestamp) -- predictable target for sync_sockeye_runs.sh,
+# and safe to resubmit into: rsync -a just updates it, same append-safety as results.jsonl itself
 echo "    mkdir -p $D && rsync -a $OUT/ $D/ && cp $SLURM_SUBMIT_DIR/slurm-${SLURM_JOB_ID}.{out,err} $D/"
 echo "then pull it to your laptop with:"
 echo "    scripts/slurm/sync_sockeye_runs.sh $(basename "$D")"
