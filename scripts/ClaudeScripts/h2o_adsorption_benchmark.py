@@ -31,6 +31,7 @@ one), hence the added rigid translate.
 
     python scripts/ClaudeScripts/h2o_adsorption_benchmark.py runs/h2o_ads_benchmark
     python scripts/ClaudeScripts/h2o_adsorption_benchmark.py runs/h2o_ads_benchmark --oxides RuO2 IrO2 --models UMA-omat
+    python scripts/ClaudeScripts/h2o_adsorption_benchmark.py runs/h2o_ads_benchmark --nudges 1.0 1.5 2.0 2.5
 """
 
 from __future__ import annotations
@@ -84,7 +85,12 @@ EXTEND_STEPS = 100
 MAX_EXTENSIONS = 3
 
 
-def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig, nudge: float) -> dict:
+def relax_bulk_slab(model: str, oxide: str, outdir: Path, cfg: RunConfig):
+    """Bulk + slab relaxation for one (model, oxide) -- shared by every nudge value in a
+    sweep, since they all start from the identical pristine slab. Splitting this out
+    avoids re-relaxing the same slab once per nudge value (same reasoning as
+    mo2_adsorption_benchmark.py's own relax_bulk_slab: real duplicated compute at sweep
+    scale, not a micro-optimization)."""
     backend = get_backend(model)
     odir = outdir / oxide / model
     info = OXIDES[oxide]
@@ -104,8 +110,16 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig, nudge: float) 
     bulk = relax_record(start, "bulk", "db", relax_cell=True).structure
     slab_in = make_slab(bulk, cfg.slab)
     slab_out = relax_record(slab_in, "slab", "cut_from_relaxed_bulk")
-    pristine_energy = slab_out.energy
-    pristine_structure = slab_out.structure
+    return slab_out.structure, slab_out.energy
+
+
+def run_adsorbate(
+    model: str, oxide: str, pristine_structure, pristine_energy: float,
+    outdir: Path, cfg: RunConfig, nudge: float,
+) -> dict:
+    backend = get_backend(model)
+    odir = outdir / oxide / model
+    info = OXIDES[oxide]
 
     ti_idx, o2c_idx = find_ti_and_o2c_anchors(pristine_structure)
 
@@ -136,11 +150,13 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig, nudge: float) 
     # and can swap which one ends up closer to O2c during relaxation (H_near/H_far are seed
     # labels, not fixed identities the optimizer has to respect).
     start_h_o2c = min(oriented.get_distance(h_near_idx, o2c_idx), oriented.get_distance(h_far_idx, o2c_idx))
-    print(f"    seed: O-M5c={start_o_ti:.3f} A, min(H...O2c)={start_h_o2c:.3f} A", flush=True)
+    print(f"    [nudge={nudge}] seed: O-M5c={start_o_ti:.3f} A, min(H...O2c)={start_h_o2c:.3f} A", flush=True)
 
     t0 = time.time()
     res = relax(
-        oriented, backend, workdir=odir / "adsorbate",
+        # Namespaced by nudge -- otherwise a sweep's later nudge values overwrite the
+        # trajectory/relaxed.vasp of earlier ones sharing the same (oxide, model) odir.
+        oriented, backend, workdir=odir / "adsorbate" / f"nudge_{nudge}",
         fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
         desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
         desorb_trend_window=DESORB_TREND_WINDOW,
@@ -161,7 +177,7 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig, nudge: float) 
     adsorbed = end_dist is not None and bond_len is not None and end_dist < DESORB_TOL * bond_len
     h_bonded = end_h_o2c < 2.3  # standard H-bond cutoff; informational, separate question
 
-    print(f"    E_ads={e_ads:+.4f} eV (lit {info['lit_e_ads_eV']:+.4f} eV, {info['lit_form']})  "
+    print(f"    [nudge={nudge}] E_ads={e_ads:+.4f} eV (lit {info['lit_e_ads_eV']:+.4f} eV, {info['lit_form']})  "
           f"adsorbed={adsorbed} (O-anchor={end_dist:.3f} A, bond~{bond_len:.3f} A)  "
           f"h_bonded={h_bonded} (min H...O2c={end_h_o2c:.3f} A)  dissociated={dissociated}  "
           f"converged={res.converged}  nsteps={res.nsteps}  {elapsed_s:.0f}s", flush=True)
@@ -177,7 +193,9 @@ def run_one(model: str, oxide: str, outdir: Path, cfg: RunConfig, nudge: float) 
     }
 
 
-def main(outdir: Path, oxides: list[str], models: list[str], fmax: float, nudge: float) -> None:
+def main(
+    outdir: Path, oxides: list[str], models: list[str], fmax: float, nudges: list[float],
+) -> None:
     cfg = RunConfig()
     cfg = replace(cfg, relax=replace(cfg.relax, fmax=fmax))
     outdir.mkdir(parents=True, exist_ok=True)
@@ -186,27 +204,48 @@ def main(outdir: Path, oxides: list[str], models: list[str], fmax: float, nudge:
     job_path = outdir / "job.json"
     job_path.write_text(json.dumps({
         "oxides": oxides, "models": models, "seed_standoff": SEED_STANDOFF,
-        "diagonal_nudge": nudge, "fmax": fmax,
+        "nudges": nudges, "fmax": fmax,
         "e_ads_reference": "E(H2O*) - E(*) - E(H2O, gas), Gonzalez et al. 2019 eq. 2",
         "literature_source": "Gonzalez et al. 2019, ACS Omega 4, 2989-2999, Table 3 (110)",
     }, indent=2))
 
+    # Models ordered as given -- put any model with a known hang/instability risk (e.g.
+    # UMA-M-omat, see backends.py's fairchem#2095 note) LAST in --models, so a hang there
+    # burns walltime only after every better-behaved model/nudge combination has already
+    # run and been written.
     pair_failures: list[str] = []
     for oxide in oxides:
         for model in models:
             tag = f"{oxide}/{model}"
             try:
-                row = run_one(model, oxide, outdir, cfg, nudge)
+                pristine_structure, pristine_energy = relax_bulk_slab(model, oxide, outdir, cfg)
             except Exception as e:
-                print(f"  [{tag}] PAIR FAILED: {e}", flush=True)
-                pair_failures.append(f"{tag}: {str(e)[:300]}")
-                row = {
-                    "model": model, "oxide": oxide, "failed": True, "error": f"{e}"[:2000],
-                    "e_ads_eV": None, "adsorbed": None, "dissociated": None,
-                    "converged": None, "nsteps": None,
-                }
-            with results_path.open("a") as f:
-                f.write(json.dumps(row) + "\n")
+                print(f"  [{tag}] BULK/SLAB FAILED: {e}", flush=True)
+                pair_failures.append(f"{tag} (bulk/slab): {str(e)[:300]}")
+                for nudge in nudges:
+                    row = {
+                        "model": model, "oxide": oxide, "nudge_A": nudge, "failed": True,
+                        "error": f"bulk/slab: {e}"[:2000], "e_ads_eV": None,
+                        "adsorbed": None, "dissociated": None, "converged": None, "nsteps": None,
+                    }
+                    with results_path.open("a") as f:
+                        f.write(json.dumps(row) + "\n")
+                continue
+
+            for nudge in nudges:
+                ntag = f"{tag}/nudge={nudge}"
+                try:
+                    row = run_adsorbate(model, oxide, pristine_structure, pristine_energy, outdir, cfg, nudge)
+                except Exception as e:
+                    print(f"  [{ntag}] PAIR FAILED: {e}", flush=True)
+                    pair_failures.append(f"{ntag}: {str(e)[:300]}")
+                    row = {
+                        "model": model, "oxide": oxide, "nudge_A": nudge, "failed": True,
+                        "error": f"{e}"[:2000], "e_ads_eV": None, "adsorbed": None,
+                        "dissociated": None, "converged": None, "nsteps": None,
+                    }
+                with results_path.open("a") as f:
+                    f.write(json.dumps(row) + "\n")
 
     print(f"\nwrote {results_path}")
     if pair_failures:
@@ -221,7 +260,8 @@ if __name__ == "__main__":
     ap.add_argument("--oxides", nargs="+", default=list(OXIDES), choices=list(OXIDES))
     ap.add_argument("--models", nargs="+", default=MODELS)
     ap.add_argument("--fmax", type=float, default=FMAX)
-    ap.add_argument("--nudge", type=float, default=DIAGONAL_NUDGE,
-                     help="rigid translate of the seed toward O2c, in Angstrom")
+    ap.add_argument("--nudges", type=float, nargs="+", default=[DIAGONAL_NUDGE],
+                     help="one or more rigid-translate distances toward O2c, in Angstrom "
+                          "(bulk/slab relax once per model, reused across every nudge value)")
     a = ap.parse_args()
-    main(a.outdir, a.oxides, a.models, a.fmax, a.nudge)
+    main(a.outdir, a.oxides, a.models, a.fmax, a.nudges)
