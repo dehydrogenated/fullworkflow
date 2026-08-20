@@ -358,11 +358,18 @@ def run_one(
         pristine_structure.lattice, pristine_structure[o2c_idx].coords, pristine_structure[ti_idx].coords,
     )
     target_dir = target_dir / np.linalg.norm(target_dir)
+    # Ti->O2c is not lateral -- see h2o_adsorption_benchmark.py's identical comment.
+    # Translating along the full 3D target_dir pushes the seed higher with every nudge
+    # instead of sliding it sideways; orient_toward still gets the full 3D vector (the H
+    # really should tilt up toward O2c), only the rigid translate is restricted to lateral.
+    lateral_dir = np.array([target_dir[0], target_dir[1], 0.0])
+    lateral_norm = np.linalg.norm(lateral_dir)
+    lateral_dir = lateral_dir / lateral_norm if lateral_norm > 1e-8 else target_dir
 
     rows = []
     for mode in MODES_TO_RUN:
         oriented = orient_toward(cand.structure, anchor_idx, n_ads, target_dir, mode=mode)
-        oriented = translate_toward(oriented, anchor_idx, n_ads, target_dir, DIAGONAL_NUDGE)
+        oriented = translate_toward(oriented, anchor_idx, n_ads, lateral_dir, DIAGONAL_NUDGE)
         start_o_ti = oriented.get_distance(anchor_idx, ti_idx)
         start_h_o2c = oriented.get_distance(h_near_idx, o2c_idx)
         print(f"    [{mode}] after {DIAGONAL_NUDGE} A nudge: O-Ti={start_o_ti:.3f} A, "

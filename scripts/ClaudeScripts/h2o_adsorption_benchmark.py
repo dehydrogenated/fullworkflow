@@ -143,8 +143,20 @@ def run_adsorbate(
     )
     target_dir = target_dir / np.linalg.norm(target_dir)
 
+    # Ti->O2c is not lateral -- the bridging O protrudes above the M5c plane (confirmed on
+    # this TiO2(110) slab: unit vector ~(0, -0.91, 0.42), i.e. 42% straight up), so
+    # translating the *whole seed* along target_dir pushes it higher with every nudge
+    # instead of just sliding it sideways -- confirmed empirically: water visibly floating
+    # further off the surface as nudge increased. orient_toward still gets the full 3D
+    # target_dir (the H really should tilt up toward O2c), but the rigid translate uses
+    # only the lateral (surface-plane) component, so nudge changes reach toward Obr without
+    # also changing standoff -- that's SEED_STANDOFF's job, not this one's.
+    lateral_dir = np.array([target_dir[0], target_dir[1], 0.0])
+    lateral_norm = np.linalg.norm(lateral_dir)
+    lateral_dir = lateral_dir / lateral_norm if lateral_norm > 1e-8 else target_dir
+
     oriented = orient_toward(cand.structure, anchor_idx, n_ads, target_dir, mode="bisector")
-    oriented = translate_toward(oriented, anchor_idx, n_ads, target_dir, nudge)
+    oriented = translate_toward(oriented, anchor_idx, n_ads, lateral_dir, nudge)
     start_o_ti = oriented.get_distance(anchor_idx, ti_idx)
     # Both H's, not just the one orient_toward aimed -- the two are chemically equivalent
     # and can swap which one ends up closer to O2c during relaxation (H_near/H_far are seed
