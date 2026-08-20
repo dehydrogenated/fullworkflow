@@ -7,8 +7,9 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --time=6:00:00  # 12 models x 3 oxides x 1 nudge; ~2-2.5h estimated normal case,
-# margin for UMA-M-*'s known hang risk (last in MODELS, so a hang there doesn't cost
-# the other 10 models' data either way -- see the Python script's own comment)
+# margin for UMA-M-* running noticeably slower than the rest (confirmed on Sockeye, not
+# a hang -- it's last in MODELS regardless, so its rows land last without delaying
+# anything else's -- see the Python script's own comment)
 #SBATCH --job-name=h2o-ads
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err

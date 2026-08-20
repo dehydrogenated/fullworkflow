@@ -87,9 +87,11 @@ OXIDES = {
 # with no kernels for Sockeye's V100s (CC 7.0), confirmed on the mo2_adsorption_benchmark
 # sweep (see sockeye_chgnet_orb_cpu_backfill.slurm's own comment) -- they run via
 # sockeye_h2o_adsorption_benchmark_cpu.slurm instead, same script, CPU-forced.
-# UMA-M-* last on purpose: gated uma-m-1p1.pt checkpoint, known predictor-construction
-# hang on some setups (fairchem#2095) -- if it hangs, every other model has already run
-# and written its rows before walltime eventually kills the job.
+# UMA-M-* last on purpose: gated uma-m-1p1.pt checkpoint, and noticeably slower per
+# relaxation than the rest of the roster (confirmed on Sockeye, not just a documented
+# risk -- backends.py's fairchem#2095 note describes a predictor-construction hang some
+# setups hit, but on this cluster it's just slow, not stuck). Keeping it last costs
+# nothing and means the rest of the roster's rows are already written before it's done.
 MODELS = [
     "MACE-mh1-omat", "MACE-mh1-oc20", "MACE-mh1-matpes",
     "UMA-omat", "UMA-oc22",
@@ -248,12 +250,11 @@ def main(
         "literature_source": "Gonzalez et al. 2019, ACS Omega 4, 2989-2999, Table 3 (110)",
     }, indent=2))
 
-    # Model-outer, oxide-inner on purpose -- put any model with a known hang/instability
-    # risk (e.g. UMA-M-*, see backends.py's fairchem#2095 note) LAST in --models. With
-    # model as the outer loop, every other model finishes across ALL oxides before a risky
-    # one even starts, so a hang there only costs its own rows, not RuO2/IrO2 data for
-    # models that already ran cleanly (oxide-outer would let a hang on TiO2 block every
-    # later oxide too, even for models that had nothing to do with the hang).
+    # Model-outer, oxide-inner on purpose -- put any noticeably slower model (e.g.
+    # UMA-M-*) LAST in --models. With model as the outer loop, every other model finishes
+    # across ALL oxides before the slow one even starts, so its rows land last without
+    # delaying RuO2/IrO2 data for models that already ran (oxide-outer would let a slow
+    # model on TiO2 delay every later oxide too, even for models with nothing to do with it).
     pair_failures: list[str] = []
     for model in models:
         for oxide in oxides:
