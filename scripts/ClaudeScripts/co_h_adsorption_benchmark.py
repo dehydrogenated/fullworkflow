@@ -108,9 +108,6 @@ MODELS = [
 ]
 SEED_STANDOFF = 0.5  # see module docstring -- validated, don't push tighter
 FMAX = 0.01
-DESORB_TOL = 2.0
-DESORB_CHECK_STEP = 100
-DESORB_TREND_WINDOW = 20
 EXTEND_STEPS = 100
 MAX_EXTENSIONS = 3
 
@@ -206,31 +203,42 @@ def run_adsorbate(
     # H goes on the bridging O2c site (its real preferred site per Andriuc et al.);
     # everything else (CO here) goes on the undercoordinated metal cation.
     cand = undercoordinated_oxygen_site(candidates) if adsorbate == "H" else undercoordinated_metal_site(candidates)
+    start_dist, _ = _adsorbate_anchor_distance(cand.structure, n_ads)
 
     t0 = time.time()
     res = relax(
         cand.structure, backend, workdir=odir / "adsorbate",
         fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
-        desorb_check_n_ads=n_ads, desorb_check_step=DESORB_CHECK_STEP,
-        desorb_trend_window=DESORB_TREND_WINDOW,
+        # desorb_check_n_ads without desorb_check_step: worker_relax.py gates its whole
+        # distance-tracking mechanism on n_ads being set (needed for extend_if_approaching
+        # to know which atoms to track), separately from check_step (which fires a
+        # mid-relaxation early-stop -- deliberately omitted here, same as
+        # mo2_adsorption_benchmark.py: the full base budget runs first, uninterrupted).
+        desorb_check_n_ads=n_ads,
         extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
     )
     elapsed_s = time.time() - t0
     e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
-    end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
-    adsorbed = bool(end_dist is not None and bond_len is not None and end_dist < DESORB_TOL * bond_len)
+    end_dist, _ = _adsorbate_anchor_distance(res.structure, n_ads)
+    # Single terminal desorption check (mo2_adsorption_benchmark.py's convention, not a
+    # bond-length multiple): ended up farther from its anchor than where it started, after
+    # the full step budget plus any extension ran. A genuinely bound adsorbate should end
+    # up closer than its deliberately-standoffed starting placement almost by construction.
+    desorbing = end_dist is not None and start_dist is not None and end_dist > start_dist
+    adsorbed = not desorbing
 
     lit_str = f"{info['lit_e_ads_eV']:+.2f}" if info["lit_e_ads_eV"] is not None else "n/a"
     print(f"    E_ads={e_ads:+.4f} eV (lit {lit_str})  adsorbed={adsorbed} "
-          f"(end_dist={end_dist:.3f} A, bond~{bond_len:.3f} A)  converged={res.converged}  "
-          f"nsteps={res.nsteps}  {elapsed_s:.0f}s", flush=True)
+          f"(start_dist={start_dist:.3f} A, end_dist={end_dist:.3f} A)  converged={res.converged}  "
+          f"extended={bool(res.meta.get('extended'))}  nsteps={res.nsteps}  {elapsed_s:.0f}s", flush=True)
 
     return {
         "model": model, "oxide": oxide, "adsorbate": adsorbate, "failed": False,
         "site": cand.site_id["site_label"],
         "e_ads_eV": e_ads, "lit_e_ads_eV": info["lit_e_ads_eV"], "lit_source": info["lit_source"],
-        "adsorbed": adsorbed, "end_dist_A": end_dist, "bond_len_A": bond_len,
+        "adsorbed": adsorbed, "start_dist_A": start_dist, "end_dist_A": end_dist,
         "converged": res.converged, "nsteps": res.nsteps, "elapsed_s": elapsed_s,
+        "extended": bool(res.meta.get("extended")), "extensions_used": res.meta.get("extensions_used", 0),
     }
 
 
