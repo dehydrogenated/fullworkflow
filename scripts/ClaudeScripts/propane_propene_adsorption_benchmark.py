@@ -40,9 +40,11 @@ adsorbate self-image clash; see conversation). --vacuum defaults to 40 A here sp
 (vs. this repo's usual 20 A default elsewhere): vertical propane stands up to ~3.6 A off
 its own anchor atom (see config.py's Propane fragment comment) plus seed_standoff plus
 relaxation headroom, so the usual 20 A leaves less clearance above a standing molecule than
-intended. seed_standoff=1.5, matching the low end of their own stated 1.5-3 A "adsorption
-center" range (our usual 0.2 A default is tuned for single-atom/small fragments like
-O/H/CO).
+intended. seed_standoff=0.5 (see the constant's own comment below -- NOT the paper's
+1.5-3 A figure, that's a different quantity in this codebase's placement convention).
+fmax=0.01, tighter than this repo's usual 0.02, since the first run's shallow physisorption
+wells need a stricter force threshold to be sure FIRE actually found the minimum rather
+than stopping early in a nearly-flat region.
 
     python scripts/ClaudeScripts/propane_propene_adsorption_benchmark.py runs/propane_propene_ads
     python scripts/ClaudeScripts/propane_propene_adsorption_benchmark.py runs/propane_propene_ads --oxides TiO2
@@ -98,8 +100,15 @@ OXIDES = {
 }
 # UMA-M-* last -- same slowest-model-last convention as every other benchmark in this repo.
 MODELS = ["Orb-v2", "eSEN-30M-OAM", "UMA-M-oc20"]
-SEED_STANDOFF = 1.5  # low end of the paper's own 1.5-3 A "adsorption center" range
-FMAX = 0.02
+# NOT the paper's own 1.5-3 A range -- that figure is a TOTAL distance in their paper, but
+# in this codebase seed_standoff is ADDED ON TOP of a covalent-radius-sum estimate
+# (_target_distance() in stages.py), so 1.5 here put every anchor ~3.2-3.4 A out -- right at
+# the edge of (or past) a physisorption well that only extends to ~3.0-3.5 A, which is why
+# the first run of this script mostly just sat there and called it "converged" without ever
+# sliding in (confirmed: 3.41/3.27/3.22 A observed starts match Ti/Ru/Ir-H covalent sums +
+# 1.5 exactly). 0.5 matches co_h_adsorption_benchmark.py's own validated value instead.
+SEED_STANDOFF = 0.5
+FMAX = 0.01
 EXTEND_STEPS = 100
 MAX_EXTENSIONS = 3
 
