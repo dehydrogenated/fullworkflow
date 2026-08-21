@@ -1,0 +1,33 @@
+{
+  "oxides": [
+    "TiO2",
+    "IrO2"
+  ],
+  "adsorbates": [
+    "CO",
+    "H"
+  ],
+  "models": [
+    "MACE-mh1-omat",
+    "MACE-mh1-oc20",
+    "MACE-mh1-matpes",
+    "UMA-omat",
+    "UMA-oc22",
+    "SevenNet-omni-omat24",
+    "SevenNet-omni-oc20",
+    "SevenNet-omni-oc22",
+    "SevenNet-omni-mpa",
+    "eSEN-30M-OAM",
+    "CHGNet-0.3.0",
+    "Orb-v2",
+    "UMA-M-omat",
+    "UMA-M-oc20"
+  ],
+  "seed_standoff": 0.5,
+  "fmax": 0.01,
+  "e_ads_reference": "CO: E(CO,gas) direct; H: 0.5*E(H2,gas)",
+  "literature_sources": {
+    "TiO2": "Andriuc, Siron & Persson 2025, Surface Science 758, 122745 (RPBE+D3)",
+    "IrO2": "Pope, Yun et al. 2025, Surface Science 751, 122619 (PBE, no dispersion)"
+  }
+}

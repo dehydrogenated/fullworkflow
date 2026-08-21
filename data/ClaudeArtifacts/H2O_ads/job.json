@@ -1,0 +1,28 @@
+{
+  "oxides": [
+    "TiO2",
+    "RuO2",
+    "IrO2"
+  ],
+  "models": [
+    "MACE-mh1-omat",
+    "MACE-mh1-oc20",
+    "MACE-mh1-matpes",
+    "UMA-omat",
+    "UMA-oc22",
+    "SevenNet-omni-omat24",
+    "SevenNet-omni-oc20",
+    "SevenNet-omni-oc22",
+    "SevenNet-omni-mpa",
+    "eSEN-30M-OAM",
+    "UMA-M-omat",
+    "UMA-M-oc20"
+  ],
+  "seed_standoff": 1.2,
+  "nudges": [
+    1.0
+  ],
+  "fmax": 0.01,
+  "e_ads_reference": "E(H2O*) - E(*) - E(H2O, gas), Gonzalez et al. 2019 eq. 2",
+  "literature_source": "Gonzalez et al. 2019, ACS Omega 4, 2989-2999, Table 3 (110)"
+}

@@ -8,7 +8,14 @@
       "Bash(cp -r runs/ovfe_tio2_benchmark/MACE-mh1-omat/slab runs/h2o_dissociation_probe/MACE-mh1-omat/slab)",
       "Bash(python3 scripts/h2o_dissociation_probe.py runs/h2o_dissociation_probe --models MACE-mh1-omat --dump-frame)",
       "Bash(python3 -c \"import sys; print\\(sys.executable\\)\")",
-      "Bash(pip show *)"
+      "Bash(pip show *)",
+      "Bash(git check-ignore *)",
+      "Bash(set -e)",
+      "Bash(rm -rf SevenNet-omni-oc20)",
+      "Bash(mv ovfe_sn_oc20_rerun/SevenNet-omni-oc20 SevenNet-omni-oc20)",
+      "Bash(rm -rf ovfe_sn_oc20_rerun)",
+      "Bash(mv ovfe_uma_m_oc20/UMA-M-oc20 UMA-M-oc20)",
+      "Bash(python3 -c \"import json; d=json.load\\(open\\('bulk/relax.json'\\)\\); h=d['header']; print\\({k:v for k,v in h.items\\(\\) if k!='opt_log'}\\)\")"
     ]
   }
 }

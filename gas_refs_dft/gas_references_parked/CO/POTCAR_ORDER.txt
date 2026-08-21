@@ -1,3 +1,0 @@
-PBE_54 POTCARs, concatenated in this order:
-  C  O
-MP uses the plain H, C, O PAW_PBE.54 potentials for these elements.
