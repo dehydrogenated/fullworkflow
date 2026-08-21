@@ -11,7 +11,8 @@ Single site only, same choice as scripts/o_adsorption_benchmark.py and for the s
 the paper places O*/OH* ontop the single most undercoordinated surface metal cation, no
 orientation search.
 
-Literature values come from data/literature/comer2022_mo2_adsorption/adsorption_energies.csv
+Literature values come from
+data/ClaudeArtifacts/O_OH_Trendline/comer2022_mo2_adsorption/adsorption_energies.csv
 (all 33 metals x {110,100} x {O,OH} -- see metadata.json there for citation/caveats,
 notably the constrained-magnetism assumption that this repo's spin-less MLIPs can't match).
 Structures come from data/structures/ (fetch missing ones with scripts/core/fetch_rutiles.py
@@ -78,8 +79,8 @@ OH_COORDS_BY_FACET = {
 SEED_STANDOFF = 0.5  # validated on TiO2(110)/Ti5c -- see o_adsorption_benchmark.py docstring
 # repo root is two levels up from scripts/ClaudeScripts/, not one -- this script isn't at
 # the top of scripts/ anymore.
-LIT_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "literature" / \
-    "comer2022_mo2_adsorption" / "adsorption_energies.csv"
+LIT_CSV = Path(__file__).resolve().parent.parent.parent / "data" / "ClaudeArtifacts" / \
+    "O_OH_Trendline" / "comer2022_mo2_adsorption" / "adsorption_energies.csv"
 
 
 def load_literature() -> dict[tuple[str, str, str], dict]:
