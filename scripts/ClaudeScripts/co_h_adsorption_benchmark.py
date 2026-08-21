@@ -38,8 +38,11 @@ Literature values:
 - TiO2(110) CO = -0.42 eV (RPBE+D3), cross-validated by Andriuc et al. against thermal
   desorption experiments at -0.43 eV (Linsebigler et al. 1995) -- genuinely weak binding,
   so a small negative E_ads is a correct result, not a failure.
-- TiO2(110) H: not tabulated as a number anywhere in the paper's text (only in a Fig. 3
-  scatter plot) -- left None rather than eyeballed.
+- TiO2(110) H = -1.18 eV (RPBE+D3). Not tabulated as a number anywhere in the paper's
+  text -- pixel-extracted from Fig. 3's scatter plot (rutile (110)[0.500] marker),
+  calibrated against the plot's own axis gridlines. See
+  data/ClaudeArtifacts/CO_H_Ads/co2red_tio2_fig3_extracted.json for the full extraction
+  (all 19 oxide/facet points from that figure) and its methodology/uncertainty notes.
 - IrO2(110) CO = -2.311 eV (223 kJ/mol desorption energy, PBE, converted and sign-flipped
   to this repo's E_ads convention: their Ed = -(our E_ads)). The paper itself flags PBE as
   likely overestimating this -- single-point HSE06 gives 216 kJ/mol (-2.239 eV), and their
@@ -80,7 +83,13 @@ OXIDES = {
         "mp_id": "mp-2657",
         "adsorbates": {
             "CO": {"lit_e_ads_eV": -0.42, "lit_source": "Andriuc et al. 2025, RPBE+D3, TiO2(110)"},
-            "H": {"lit_e_ads_eV": None, "lit_source": "not tabulated for TiO2(110) in the paper's text"},
+            "H": {
+                "lit_e_ads_eV": -1.18,
+                "lit_source": "Andriuc et al. 2025, Fig. 3 (RPBE+D3, TiO2 rutile (110)[0.500]) -- "
+                               "pixel-extracted from the scatter plot, not tabulated as a number "
+                               "anywhere in the paper's text; see "
+                               "data/ClaudeArtifacts/CO_H_Ads/co2red_tio2_fig3_extracted.json",
+            },
         },
     },
     "IrO2": {
