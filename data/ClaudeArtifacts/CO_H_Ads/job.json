@@ -24,7 +24,7 @@
     "UMA-M-oc20"
   ],
   "seed_standoff": 0.5,
-  "fmax": 0.01,
+  "fmax": 0.02,
   "e_ads_reference": "CO: E(CO,gas) direct; H: 0.5*E(H2,gas)",
   "literature_sources": {
     "TiO2": "Andriuc, Siron & Persson 2025, Surface Science 758, 122745 (RPBE+D3)",
