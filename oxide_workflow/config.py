@@ -84,6 +84,33 @@ ADSORBATE_FRAGMENTS: dict[str, tuple[tuple[str, ...], tuple[tuple[float, float, 
     # (Chavez-Rocha et al., Molecules 2023, 28, 1776: CO2 approaches M1-OA first, then may
     # bend toward a surface oxygen as a second interaction).
     "CO2": (("O", "C", "O"), ((0.0, 0.0, 0.0), (0.0, 0.0, 1.16), (0.0, 0.0, 2.32))),
+    # Vertical, terminal-CH3-down: one methyl group anchors (its 3 H's all sit near z=0, a
+    # tripod on the surface) with the rest of the chain extending straight up. Chosen to
+    # match GAME-Net-Ox's (van Hout et al. 2026, Digital Discovery 5, 407-414) own top_M5c
+    # config with the largest C-backbone z-spread (~2.1-2.5 A vs ~0.6-1.4 A for every other
+    # config, confirmed directly from their relaxed CONTCARs, not their labels) -- the one
+    # DFT config in their dataset that is actually a standing/vertical propane rather than
+    # flat-lying. Geometry from ASE's g2 reference set (Curtiss et al. 1997), rotated so the
+    # central-to-anchor-terminal C-C bond is vertical.
+    "Propane": (("H", "C", "C", "C", "H", "H", "H", "H", "H", "H", "H"),
+                ((0.0000, 1.5057, 0.0000), (0.0000, 0.4884, 1.9257), (0.0000, 0.4884, 0.4012),
+                 (0.0000, -0.9209, 2.5069), (-0.8769, 1.0344, 2.2911), (0.8769, 1.0344, 2.2911),
+                 (0.0000, -0.9039, 3.6003), (0.8836, -0.0262, 0.0119), (-0.8836, -0.0262, 0.0119),
+                 (-0.8836, -1.4770, 2.1796), (0.8836, -1.4770, 2.1796))),
+    # Side-on through the C=C: both alkene carbons (and the rest of the sp2 vinyl framework)
+    # sit flat at the same height (anchor = one C=C carbon, not an H), the methyl group
+    # elevated above -- the classic Dewar-Chatt-Duncanson pi-complex geometry, and also what
+    # GAME-Net-Ox's own best-binding top_M5c configs actually look like (C=C height
+    # difference 0.01-0.19 A across all 3 oxides, confirmed from their relaxed CONTCARs).
+    # Idealized sp2 geometry (C1=C2 1.318 A, C2-C3 1.501 A, /_C1C2C3 124.3 deg -- ASE's g2 set
+    # has no propene entry). One methyl H geometrically must dip a hair below the vinyl
+    # plane for an in-plane C-C bond (unavoidable for 3 tetrahedral substituents 120 deg
+    # apart around an axis that itself has no z-component) -- clipped to z=0.02 rather than
+    # left negative.
+    "Propene": (("C", "C", "C", "H", "H", "H", "H", "H", "H"),
+                ((0.0000, -1.3180, 0.0200), (0.0000, 0.0000, 0.0200), (1.2400, 0.8459, 0.0200),
+                 (-0.9611, 0.5078, 0.0200), (0.9317, -0.7582, 0.0200), (-0.9317, -0.7582, 0.0200),
+                 (0.9377, 0.6397, 0.0200), (1.4419, -0.0994, 0.5166), (0.4335, 1.3788, 0.5166))),
 }
 
 @dataclass(frozen=True)
