@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -206,6 +207,7 @@ def run_adsorbate(
     # everything else (CO here) goes on the undercoordinated metal cation.
     cand = undercoordinated_oxygen_site(candidates) if adsorbate == "H" else undercoordinated_metal_site(candidates)
 
+    t0 = time.time()
     res = relax(
         cand.structure, backend, workdir=odir / "adsorbate",
         fmax=cfg.relax.fmax, max_steps=cfg.relax.max_steps, optimizer=cfg.relax.optimizer,
@@ -213,6 +215,7 @@ def run_adsorbate(
         desorb_trend_window=DESORB_TREND_WINDOW,
         extend_if_approaching=True, extend_steps=EXTEND_STEPS, max_extensions=MAX_EXTENSIONS,
     )
+    elapsed_s = time.time() - t0
     e_ads = adsorption_energy(res.energy, pristine_energy, e_gas)
     end_dist, bond_len = _adsorbate_anchor_distance(res.structure, n_ads)
     adsorbed = bool(end_dist is not None and bond_len is not None and end_dist < DESORB_TOL * bond_len)
@@ -220,14 +223,14 @@ def run_adsorbate(
     lit_str = f"{info['lit_e_ads_eV']:+.2f}" if info["lit_e_ads_eV"] is not None else "n/a"
     print(f"    E_ads={e_ads:+.4f} eV (lit {lit_str})  adsorbed={adsorbed} "
           f"(end_dist={end_dist:.3f} A, bond~{bond_len:.3f} A)  converged={res.converged}  "
-          f"nsteps={res.nsteps}", flush=True)
+          f"nsteps={res.nsteps}  {elapsed_s:.0f}s", flush=True)
 
     return {
         "model": model, "oxide": oxide, "adsorbate": adsorbate, "failed": False,
         "site": cand.site_id["site_label"],
         "e_ads_eV": e_ads, "lit_e_ads_eV": info["lit_e_ads_eV"], "lit_source": info["lit_source"],
         "adsorbed": adsorbed, "end_dist_A": end_dist, "bond_len_A": bond_len,
-        "converged": res.converged, "nsteps": res.nsteps,
+        "converged": res.converged, "nsteps": res.nsteps, "elapsed_s": elapsed_s,
     }
 
 
@@ -275,7 +278,7 @@ def main(outdir: Path, oxides: list[str], adsorbates: list[str], models: list[st
                     row = {
                         "model": model, "oxide": oxide, "adsorbate": adsorbate, "failed": True,
                         "error": f"bulk/slab: {e}"[:2000], "e_ads_eV": None, "adsorbed": None,
-                        "converged": None, "nsteps": None,
+                        "converged": None, "nsteps": None, "elapsed_s": None,
                     }
                     with results_path.open("a") as f:
                         f.write(json.dumps(row) + "\n")
@@ -291,7 +294,7 @@ def main(outdir: Path, oxides: list[str], adsorbates: list[str], models: list[st
                     row = {
                         "model": model, "oxide": oxide, "adsorbate": adsorbate, "failed": True,
                         "error": f"{e}"[:2000], "e_ads_eV": None, "adsorbed": None,
-                        "converged": None, "nsteps": None,
+                        "converged": None, "nsteps": None, "elapsed_s": None,
                     }
                 with results_path.open("a") as f:
                     f.write(json.dumps(row) + "\n")
