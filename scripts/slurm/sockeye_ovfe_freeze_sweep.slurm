@@ -1,6 +1,7 @@
 #!/bin/bash
-#SBATCH --account=st-akkiraju-1
-#SBATCH --partition=cascade
+#SBATCH --account=st-akkiraju-1-gpu
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -16,6 +17,9 @@
 # supercell/vacuum held at the current SlabConfig default (4x2, min_vacuum_size=20.0).
 # Stops at 7/8, not 8/8 -- freezing every atom would also freeze the vacancy site's own
 # neighbors, so the defective structure could never relax.
+#
+# GPU by default (per Sean, 2026-08-20) -- --time=6:00:00 is carried over from a CPU
+# estimate, not a measured GPU budget; treat it as a ceiling.
 #
 #   cd /scratch/st-akkiraju-1/$USER
 #   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_ovfe_freeze_sweep.slurm

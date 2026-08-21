@@ -1,6 +1,7 @@
 #!/bin/bash
-#SBATCH --account=st-akkiraju-1
-#SBATCH --partition=cascade
+#SBATCH --account=st-akkiraju-1-gpu
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
@@ -17,6 +18,11 @@
 # ovfe_convergence_common.py's BASE_SLAB comment). See
 # scripts/ClaudeScripts/ovfe_vacuum_sweep.py for the full rationale. A model with a
 # missing checkpoint/env is skipped, not fatal -- the other two still complete.
+#
+# GPU by default (per Sean, 2026-08-20) -- UMA-omat dominates wall-clock and the -gpu
+# account/partition should help it the most; --time=4:00:00 is carried over from the CPU
+# estimate unverified against an actual GPU run, so treat it as a conservative ceiling,
+# not a measured budget.
 #
 #   cd /scratch/st-akkiraju-1/$USER
 #   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_ovfe_vacuum_sweep.slurm
