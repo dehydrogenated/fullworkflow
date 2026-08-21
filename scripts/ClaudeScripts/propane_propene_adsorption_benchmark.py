@@ -9,29 +9,28 @@ convergence. Slab: p(2x2) rutile MO2(110), 5 tri-layers, top 2 relaxed / bottom 
 15 A vacuum. Adsorbates placed with DockOnSurf on 5 named sites (top_M5c, top_Obr,
 bridge_Obr, hollow_M5c-Obr, hollow_M5c-Oip), up to 3 configs each.
 
-Orientation: propane physisorbs weakly and mostly lies flat in their dataset, but one
-config per oxide is a genuine standing/vertical geometry (identified by downloading their
-own relaxed CONTCARs from ioChem-BD -- doi:10.19061/iochem-bd-1-396 -- and measuring the
-propane carbon backbone's z-spread: ~2.1-2.5 A for these vs ~0.6-1.4 A for every other
-config). Propene is assumed to bond through its C=C (Dewar-Chatt-Duncanson pi-complex);
-the same CONTCAR inspection confirms their strongest-binding configs are exactly this --
-both alkene carbons within 0.01-0.19 A of the same height, i.e. the C=C bond flat and
-close to the surface. Both signatures land on the SAME site across all three oxides:
-top_M5c, i.e. directly ontop the single undercoordinated surface metal cation (Ti5c/Ru5c/
-Ir5c) -- this repo's own site-finding calls this "ontop" a metal-labeled site, exactly
-matching undercoordinated_metal_site() from co_h_adsorption_benchmark.py.
-ADSORBATE_FRAGMENTS["Propane"]/["Propene"] in config.py encode these two orientations
-directly (vertical terminal-CH3-down / flat C=C-down) rather than a flat "maximize contact"
-default.
+Orientation: propane physisorbs weakly and mostly lies flat in their dataset, but a few
+configs per oxide are genuine standing/vertical geometries, and a few propene configs have
+their C=C genuinely flat/close to the surface (Dewar-Chatt-Duncanson pi-complex geometry)
+rather than tilted -- identified by downloading their own relaxed CONTCARs from ioChem-BD
+(doi:10.19061/iochem-bd-1-396) and, for every config of that molecule on that oxide (all 5
+sites, not just top_M5c), measuring how close its geometry sits to OUR OWN fragment's exact
+target: propane's 3-carbon z-spread (ours = 2.106 A, from ADSORBATE_FRAGMENTS["Propane"] in
+config.py) or propene's C=C height difference (ours = 0.000 A, both alkene carbons built at
+identical z in ADSORBATE_FRAGMENTS["Propene"]). The literature config with the SMALLEST
+|difference| from our own target wins the comparison slot for that oxide/molecule -- not
+their strongest binder, not necessarily top_M5c (an earlier pass of this search was
+restricted to top_M5c on the a priori assumption both signatures would land there; three of
+the six pairs below turned out to have an even closer geometric match on a different site
+once the search was widened to all 5).
 
-Literature values: the specific top_M5c config identified above for each oxide/molecule
-(not necessarily their global minimum across all 5 sites -- see module docstring above for
-why). Not tabulated as numbers in the paper's text; computed from their own relaxed
-energies via their Eq. 1 (E_ads = E_tot - E_slab - E_mol), same method as the earlier
-multi-site version of this script:
-- TiO2(110): Propane -0.501 eV (top_M5c config_2), Propene -0.937 eV (top_M5c config_2)
-- RuO2(110): Propane -0.539 eV (top_M5c config_2), Propene -1.339 eV (top_M5c config_3)
-- IrO2(110): Propane -0.876 eV (top_M5c config_2), Propene -2.127 eV (top_M5c config_1)
+Literature values: the config identified above for each oxide/molecule (not their global
+minimum across all 5 sites, and not always top_M5c -- see paragraph above). Not tabulated as
+numbers in the paper's text; computed from their own relaxed energies via their Eq. 1
+(E_ads = E_tot - E_slab - E_mol):
+- TiO2(110): Propane -0.501 eV (top_M5c config_2), Propene -0.933 eV (hollow_M5c-Oip config_2)
+- RuO2(110): Propane -0.539 eV (top_M5c config_2), Propene -1.328 eV (hollow_M5c-Oip config_1)
+- IrO2(110): Propane -0.904 eV (hollow_M5c-Obr config_1), Propene -2.127 eV (top_M5c config_1)
 
 Slab size: their p(2x2), 5 tri-layers (120 atoms), 15 A vacuum vs. our 4x2 supercell,
 min_slab_size 12 A (~4 trilayers), bottom 50% frozen -- deliberately bigger laterally (a
@@ -69,9 +68,10 @@ from oxide_workflow.structures import get_structure
 
 LIT_SOURCE = (
     "van Hout, Loveday, Morales-Vidal, Morandi & Lopez 2026, Digital Discovery 5, 407-414 "
-    "(GAME-Net-Ox), DOI 10.1039/D5DD00331H, PBE+D3; specific top_M5c config identified from "
-    "their own relaxed CONTCARs (doi:10.19061/iochem-bd-1-396) as the vertical-propane / "
-    "side-on-propene geometry -- not necessarily their global best across all 5 sites, see "
+    "(GAME-Net-Ox), DOI 10.1039/D5DD00331H, PBE+D3; config identified from their own relaxed "
+    "CONTCARs (doi:10.19061/iochem-bd-1-396) as the closest geometric match -- across all 5 "
+    "sites, not just top_M5c -- to our own fixed vertical-propane / side-on-propene "
+    "orientation, not necessarily their global best or on the same site every time, see "
     "module docstring"
 )
 
@@ -80,20 +80,20 @@ OXIDES = {
         "mp_id": "mp-2657",
         "adsorbates": {
             "Propane": {"lit_e_ads_eV": -0.5013, "lit_config": "top_M5c config_2"},
-            "Propene": {"lit_e_ads_eV": -0.9373, "lit_config": "top_M5c config_2"},
+            "Propene": {"lit_e_ads_eV": -0.9329, "lit_config": "hollow_M5c-Oip config_2"},
         },
     },
     "RuO2": {
         "mp_id": "mp-825",
         "adsorbates": {
             "Propane": {"lit_e_ads_eV": -0.5394, "lit_config": "top_M5c config_2"},
-            "Propene": {"lit_e_ads_eV": -1.3393, "lit_config": "top_M5c config_3"},
+            "Propene": {"lit_e_ads_eV": -1.3277, "lit_config": "hollow_M5c-Oip config_1"},
         },
     },
     "IrO2": {
         "mp_id": "mp-2723",
         "adsorbates": {
-            "Propane": {"lit_e_ads_eV": -0.8764, "lit_config": "top_M5c config_2"},
+            "Propane": {"lit_e_ads_eV": -0.9043, "lit_config": "hollow_M5c-Obr config_1"},
             "Propene": {"lit_e_ads_eV": -2.1267, "lit_config": "top_M5c config_1"},
         },
     },
