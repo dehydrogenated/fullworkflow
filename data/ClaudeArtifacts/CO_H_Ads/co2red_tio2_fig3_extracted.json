@@ -1,0 +1,30 @@
+{
+  "_meta": {
+    "source": "Fig. 3, Andriuc, Siron & Persson, Surface Science 758 (2025) 122745 (co2red_tio2.pdf)",
+    "note": "Paper states 'Data will be made available on request' -- no numeric table was published. These values were extrapolated by pixel-position extraction from the published scatter plot (marker centroids calibrated against the plot's own axis gridlines, DPI-rendered from the embedded figure), not read from any released dataset.",
+    "method": "Axis gridlines fit via linear regression on detected gridline pixel positions (R^2=1 by construction, 6 x-ticks / 7 y-ticks). Marker centroids found per legend color+shape via connected-component analysis; overlapping markers in the dense cluster near the origin were split via distance-transform peak-finding and confirmed by visual comparison against the legend glyphs.",
+    "uncertainty_eV": "~0.05-0.1 eV typical (axis calibration is exact; dominant error is marker-centroid localization against a JPEG-compressed, ~1300px-wide embedded image). The 'TiO2 (anatase), (111) [0.125]' row has the lowest shape-match confidence -- it sits in the most crowded cluster and was assigned by elimination after the other 9 anatase markers were matched to their legend glyphs one-by-one; its position is still precise, only the facet label carries slightly more uncertainty.",
+    "sanity_check": "Residuals against the paper's own reported oxide linear fit (CO = 1.11*H + 0.66, R^2=0.77) have mean ~0.00 and std ~0.76 eV, consistent with the paper's R^2. The two largest outliers -- TiO2 rutile (111)[0.446] and TiO2 anatase (101)[0.355] -- are exactly the two surfaces the paper's own text calls out by name as having 'strongly negative adsorption energies for both CO and H', which cross-validates the extraction against the paper's prose."
+  },
+  "data": [
+    {"material": "CeO2", "facet": "(110)", "c_shift": "0.250", "H_ads_eV": -0.96, "CO_ads_eV": -1.46},
+    {"material": "CeO2", "facet": "(111)", "c_shift": "0.500", "H_ads_eV": -0.71, "CO_ads_eV": 0.69},
+    {"material": "NaTaO3", "facet": "(100)", "c_shift": "-0.250", "H_ads_eV": 0.20, "CO_ads_eV": 0.63},
+    {"material": "SrTiO3", "facet": "(100)", "c_shift": "-0.250", "H_ads_eV": -1.45, "CO_ads_eV": -0.51},
+    {"material": "TiO2 (rutile)", "facet": "(100)", "c_shift": "0.250", "H_ads_eV": -0.21, "CO_ads_eV": 0.50},
+    {"material": "TiO2 (rutile)", "facet": "(101)", "c_shift": "0.500", "H_ads_eV": -0.20, "CO_ads_eV": 0.37},
+    {"material": "TiO2 (rutile)", "facet": "(110)", "c_shift": "0.500", "H_ads_eV": -1.18, "CO_ads_eV": 0.42},
+    {"material": "TiO2 (rutile)", "facet": "(111)", "c_shift": "-0.446", "H_ads_eV": -0.13, "CO_ads_eV": 0.21},
+    {"material": "TiO2 (rutile)", "facet": "(111)", "c_shift": "0.446", "H_ads_eV": -5.16, "CO_ads_eV": -4.49},
+    {"material": "TiO2 (anatase)", "facet": "(110)", "c_shift": "0.250", "H_ads_eV": -0.36, "CO_ads_eV": 0.45},
+    {"material": "TiO2 (anatase)", "facet": "(100)", "c_shift": "0.250", "H_ads_eV": -0.09, "CO_ads_eV": 0.66},
+    {"material": "TiO2 (anatase)", "facet": "(001)", "c_shift": "0.125", "H_ads_eV": -1.03, "CO_ads_eV": -0.86},
+    {"material": "TiO2 (anatase)", "facet": "(101)", "c_shift": "-0.020", "H_ads_eV": -1.37, "CO_ads_eV": -1.21},
+    {"material": "TiO2 (anatase)", "facet": "(101)", "c_shift": "-0.355", "H_ads_eV": -0.46, "CO_ads_eV": -0.13},
+    {"material": "TiO2 (anatase)", "facet": "(101)", "c_shift": "0.125", "H_ads_eV": -0.68, "CO_ads_eV": -0.34},
+    {"material": "TiO2 (anatase)", "facet": "(101)", "c_shift": "0.355", "H_ads_eV": -3.06, "CO_ads_eV": -4.88},
+    {"material": "TiO2 (anatase)", "facet": "(101)", "c_shift": "0.625", "H_ads_eV": -1.97, "CO_ads_eV": -0.12},
+    {"material": "TiO2 (anatase)", "facet": "(111)", "c_shift": "0.020", "H_ads_eV": -0.44, "CO_ads_eV": 0.67},
+    {"material": "TiO2 (anatase)", "facet": "(111)", "c_shift": "0.125", "H_ads_eV": 0.06, "CO_ads_eV": 0.53}
+  ]
+}

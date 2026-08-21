@@ -6,7 +6,7 @@ IrO2(110): vs. Pope, Yun et al. (Surface Science 751, 2025, 122619), plain PBE (
 dispersion correction), fmax=0.03 eV/A, explicit 4x2 supercell, 4 layers (~12 A thick),
 25 A vacuum, bottom 2 layers fixed. Different functional, different fmax, different slab
 convention between the two papers -- noted here rather than reconciled, since our own
-compute settings (fmax=0.01, seed_standoff=0.5) stay fixed across both oxides regardless
+compute settings (fmax=0.02, seed_standoff=0.5) stay fixed across both oxides regardless
 of what each paper individually used. Both papers agree on the site type that matters for
 CO though: ontop the single most undercoordinated surface metal cation (Ti5c / Ircus) --
 on IrO2(110)'s *stoichiometric* surface specifically, this isn't just the preferred site,
@@ -107,7 +107,7 @@ MODELS = [
     "UMA-M-omat", "UMA-M-oc20",
 ]
 SEED_STANDOFF = 0.5  # see module docstring -- validated, don't push tighter
-FMAX = 0.01
+FMAX = 0.02
 EXTEND_STEPS = 100
 MAX_EXTENSIONS = 3
 
