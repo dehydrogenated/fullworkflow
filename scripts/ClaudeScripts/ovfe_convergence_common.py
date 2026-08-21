@@ -153,6 +153,38 @@ def run_point(model: str, bulk_structure, cfg: RunConfig, outdir: Path, point_ta
     return row
 
 
+def _wait_for_gpu_memory(min_free_mib: int = 2000, timeout_s: float = 30.0, poll_s: float = 2.0) -> None:
+    """Guard against a race where the previous model's last subprocess hasn't
+    released its CUDA allocation by the time the next model's first subprocess
+    launches. Observed directly on Sockeye: UMA-omat finished its full 8-point
+    freeze sweep cleanly, then eSEN's very first relaxation OOMed with 31.56 of
+    31.73 GiB already "in use" -- eSEN-30M-OAM is a 30M-param model, nowhere
+    near enough to explain that on its own, and Orb-v2 ran clean immediately
+    after eSEN's block ended, so the GPU wasn't externally starved for the
+    whole job -- just for that one window right after UMA-omat. subprocess.run()
+    returning doesn't guarantee the CUDA driver has actually reclaimed the
+    memory yet. No-op if nvidia-smi isn't available (e.g. a CPU-only run)."""
+    import shutil
+    import subprocess as sp
+    if shutil.which("nvidia-smi") is None:
+        return
+    t0 = time.time()
+    while time.time() - t0 < timeout_s:
+        try:
+            out = sp.run(
+                ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,noheader,nounits"],
+                capture_output=True, text=True, timeout=10,
+            )
+            free_mib = int(out.stdout.strip().splitlines()[0])
+        except Exception:
+            return  # can't query -- don't block the sweep over a diagnostics failure
+        if free_mib >= min_free_mib:
+            return
+        print(f"    (GPU has only {free_mib} MiB free -- waiting for the previous "
+              f"model's subprocess to release memory)", flush=True)
+        time.sleep(poll_s)
+
+
 def run_sweep(sweep_param: str, values: list, apply_value, outdir: Path) -> None:
     """Drives one full sweep: relax bulk once per model, then one slab+vacancy funnel per
     (model, value). apply_value(cfg, value) -> cfg with exactly that one SlabConfig field
@@ -167,6 +199,7 @@ def run_sweep(sweep_param: str, values: list, apply_value, outdir: Path) -> None
     }, indent=2))
 
     for model in MODELS:
+        _wait_for_gpu_memory()
         cfg = base_config()
         try:
             bulk = relax_bulk(model, cfg, outdir)
@@ -182,6 +215,11 @@ def run_sweep(sweep_param: str, values: list, apply_value, outdir: Path) -> None
                     f.write(json.dumps(row) + "\n")
             continue
         for value in values:
+            # Not just between models -- observed directly on the height sweep: eSEN
+            # succeeded at 96/192/288 atoms (wall-clock climbing steeply: 214s, 346s,
+            # 535s) then OOMed at 384 atoms. A leftover allocation between successive
+            # points of the SAME model is just as real a risk as between models.
+            _wait_for_gpu_memory()
             point_cfg = apply_value(cfg, value)
             tag = f"{sweep_param}_{value}".replace(" ", "").replace(",", "x").replace("(", "").replace(")", "")
             try:

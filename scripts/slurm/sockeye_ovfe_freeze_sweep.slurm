@@ -36,6 +36,12 @@ export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+
+# eSEN OOMed mid-sweep on the height/freeze sweeps at ~384+ atoms even with a
+# fresh subprocess per relaxation -- the driver-reported gap between allocated and
+# reserved-but-unallocated memory in that crash suggests fragmentation, not just
+# raw need. This is PyTorch's own suggested mitigation from that error message.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 
 if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
