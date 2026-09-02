@@ -10,10 +10,12 @@
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #
-# scripts/core/run_stage.py on Sockeye -- one stage (bulk/slab/vacancy/adsorbate), one model,
-# skipping every stage after the one requested. For OVFE-only comparisons this avoids the
-# adsorbate sweep that dominates a full oxide_workflow.pipeline run. Submit from /scratch,
-# with an explicit --outdir per model so parallel submissions don't collide:
+# One stage only (bulk/slab/vacancy/adsorbate), skipping everything after it -- for
+# OVFE-only comparisons this avoids the adsorbate sweep that dominates a full pipeline run.
+# See scripts/core/run_stage.py for what the stages do and which flags it takes.
+#
+# CPU by default. Pass the GPU account/partition/gres at submission time to switch --
+# command-line flags beat the #SBATCH defaults above, so no editing is needed.
 #
 #   cd /scratch/st-akkiraju-1/$USER
 #   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_run_stage.slurm \
@@ -24,45 +26,7 @@
 #          vacancy --model UMA-M-oc20 --outdir runs/ovfe_uma_m_oc20
 
 set -euo pipefail
-
-PROJECT=/arc/project/st-akkiraju-1/ssong18
-REPO="$PROJECT/fullworkflow"
-
-export OXW_CONDA_BASE="$PROJECT/miniforge3"
-export OXW_MODEL_DIR="$PROJECT/models"
-
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="$OMP_NUM_THREADS"
-
-# nvidia-smi, not CUDA_VISIBLE_DEVICES -- that env var is inherited from the submitting
-# shell by sbatch's default --export=ALL, so a stray value from an earlier interactive GPU
-# session can make a --partition=cascade job (no --gres=gpu) wrongly resolve to cuda. See
-# sockeye_job.sh for the full incident. nvidia-smi respects SLURM's cgroup isolation instead.
-if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
-    export OXW_DEVICE=cuda
-else
-    export OXW_DEVICE=cpu
-fi
-
-export XDG_CACHE_HOME="${OXW_CACHE:-$SLURM_SUBMIT_DIR/.cache}"
-export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
-export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
-export HF_HOME="$XDG_CACHE_HOME/huggingface"
-export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
-export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
-export CACHED_PATH_CACHE_ROOT="$XDG_CACHE_HOME/cached_path"  # orb-models' own cache lib -- ignores XDG_CACHE_HOME, has its own var
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
-         "$FAIRCHEM_CACHE_DIR" "$CACHED_PATH_CACHE_ROOT"
-
-source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
-conda activate oxw
-
-cd "$SLURM_SUBMIT_DIR"
-
-echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
+source /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/_env.sh
 
 test -f "$OXW_MODEL_DIR/mace-mh-1.model" || {
     echo "missing checkpoint: $OXW_MODEL_DIR/mace-mh-1.model" >&2
@@ -74,6 +38,7 @@ test -f "$OXW_MODEL_DIR/uma-m-1p1.pt" || echo "note: uma-m-1p1.pt not staged (ne
 # --outdir, and any geometry/relax overrides, exactly like running it locally.
 python "$REPO/scripts/core/run_stage.py" "$@"
 
+# --outdir is caller-supplied, so this job can't name the destination for keep_results.
 echo
 echo "results in scratch under the --outdir you passed above"
 echo "to keep them, run this on the LOGIN node (scratch is purged on a timer):"
