@@ -45,42 +45,7 @@
 
 set -euo pipefail
 
-PROJECT=/arc/project/st-akkiraju-1/ssong18
-REPO="$PROJECT/fullworkflow"
-
-export OXW_CONDA_BASE="$PROJECT/miniforge3"
-export OXW_MODEL_DIR="$PROJECT/models"
-
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="$OMP_NUM_THREADS"
-
-# nvidia-smi, not CUDA_VISIBLE_DEVICES -- see sockeye_job.sh for the full incident. This job
-# requests a GPU (--gres=gpu:1 above), so this should resolve to cuda.
-if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
-    export OXW_DEVICE=cuda
-else
-    export OXW_DEVICE=cpu
-fi
-
-export XDG_CACHE_HOME="${OXW_CACHE:-$SLURM_SUBMIT_DIR/.cache}"
-export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
-export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
-export HF_HOME="$XDG_CACHE_HOME/huggingface"
-export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
-export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
-export CACHED_PATH_CACHE_ROOT="$XDG_CACHE_HOME/cached_path"  # orb-models' own cache lib -- ignores XDG_CACHE_HOME, has its own var
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
-         "$FAIRCHEM_CACHE_DIR" "$CACHED_PATH_CACHE_ROOT"
-
-source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
-conda activate oxw
-
-cd "$SLURM_SUBMIT_DIR"
-
-echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
+source /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/_env.sh
 
 for env in mace-clean fairchem sevenn esen; do
     test -d "$OXW_CONDA_BASE/envs/$env" || {

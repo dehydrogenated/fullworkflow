@@ -54,67 +54,7 @@
 
 set -euo pipefail
 
-PROJECT=/arc/project/st-akkiraju-1/ssong18
-
-# The two machine-specific paths backends.py reads (defaults are the local Mac layout).
-export OXW_CONDA_BASE="$PROJECT/miniforge3"
-export OXW_MODEL_DIR="$PROJECT/models"
-
-# Compute nodes have no outbound network. Anything that would reach out at runtime has to
-# be pre-staged on the login node — the checkpoints above, and every pip install. These
-# stop MACE/torch/HF from trying anyway, so a mistake fails loudly instead of hanging
-# until the walltime runs out.
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-
-# Match torch's thread count to what the scheduler actually gave us; left unset, torch
-# grabs every core on the node and thrashes against the other jobs sharing it.
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="$OMP_NUM_THREADS"
-
-# Query the hardware directly rather than trusting CUDA_VISIBLE_DEVICES. This used to check
-# that variable instead, on the theory that SLURM sets it only when --gres=gpu was granted --
-# true of the scheduler's OWN behavior, but wrong in practice: sbatch inherits the entire
-# submitting shell's environment by default (no --export=NONE here), so a CUDA_VISIBLE_DEVICES
-# left over from an earlier interactive GPU session on the login node rides straight into a
-# job that never requested one. Confirmed: a --partition=cascade job (no --gres=gpu at all)
-# hit the identical "CUDA error: no kernel image is available for execution on the device"
-# crash as the real GPU jobs, because OXW_DEVICE still resolved to cuda from the stale
-# inherited value. nvidia-smi respects SLURM's own cgroup isolation, so -L correctly reports
-# nothing for a job that wasn't granted a GPU regardless of what the shell exported:
-#
-#     sbatch --partition=gpu --gres=gpu:1 ...   -> cuda
-#     sbatch --partition=cascade ...            -> cpu, even with a stale env var inherited
-if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L 2>/dev/null | grep -q "GPU"; then
-    export OXW_DEVICE=cuda
-else
-    export OXW_DEVICE=cpu
-fi
-
-# Compute nodes mount BOTH $HOME and /arc/project read-only — scratch is the only writable
-# filesystem. Every library that caches under $HOME therefore has to be redirected or it
-# dies mid-run: triton (JIT-compiles fused GPU kernels, killed the first GPU run with
-# "Read-only file system: /home/…/.triton"), torch inductor, huggingface, and matplotlib,
-# which pymatgen pulls in. Kept outside $SLURM_SUBMIT_DIR/runs so compiled kernels survive
-# between jobs — otherwise every run recompiles from scratch.
-export XDG_CACHE_HOME="${OXW_CACHE:-$SLURM_SUBMIT_DIR/.cache}"
-export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
-export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
-export HF_HOME="$XDG_CACHE_HOME/huggingface"
-export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
-# fairchem ignores XDG_CACHE_HOME — fairchem/core/_config.py reads FAIRCHEM_CACHE_DIR and
-# otherwise hardcodes ~/.cache/fairchem, then calls os.makedirs at *import* time. So it
-# fails the moment the worker imports it, before any model is touched.
-export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
-         "$FAIRCHEM_CACHE_DIR"
-
-source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
-conda activate oxw
-
-cd "$SLURM_SUBMIT_DIR"
-
-echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus"
+source /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/_env.sh
 echo "conda base $OXW_CONDA_BASE"
 echo "models     $OXW_MODEL_DIR"
 echo "device     $OXW_DEVICE"

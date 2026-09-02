@@ -44,36 +44,11 @@ case "$ROW" in
     *) echo "unknown row: $ROW -- expected 3d, 4d, or 5d" >&2; exit 1 ;;
 esac
 
-PROJECT=/arc/project/st-akkiraju-1/ssong18
-REPO="$PROJECT/fullworkflow"
-
-export OXW_CONDA_BASE="$PROJECT/miniforge3"
-export OXW_MODEL_DIR="$PROJECT/models"
-
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
-
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="$OMP_NUM_THREADS"
-
-export OXW_DEVICE=cpu  # hardcoded on purpose -- see header, no detection needed here
-
-export XDG_CACHE_HOME="${OXW_CACHE:-$SLURM_SUBMIT_DIR/.cache}"
-export TRITON_CACHE_DIR="$XDG_CACHE_HOME/triton"
-export TORCHINDUCTOR_CACHE_DIR="$XDG_CACHE_HOME/torchinductor"
-export HF_HOME="$XDG_CACHE_HOME/huggingface"
-export MPLCONFIGDIR="$XDG_CACHE_HOME/matplotlib"
-export FAIRCHEM_CACHE_DIR="$XDG_CACHE_HOME/fairchem"
-export CACHED_PATH_CACHE_ROOT="$XDG_CACHE_HOME/cached_path"  # orb-models' own cache lib -- ignores XDG_CACHE_HOME, has its own var
-mkdir -p "$TRITON_CACHE_DIR" "$TORCHINDUCTOR_CACHE_DIR" "$HF_HOME" "$MPLCONFIGDIR" \
-         "$FAIRCHEM_CACHE_DIR" "$CACHED_PATH_CACHE_ROOT"
-
-source "$OXW_CONDA_BASE/etc/profile.d/conda.sh"
-conda activate oxw
-
-cd "$SLURM_SUBMIT_DIR"
-
-echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE, row $ROW"
+# Pinned, not detected: this job never asks for a GPU (no -gpu account, no --gres),
+# and both models are measured fine on CPU -- see the header note above.
+OXW_DEVICE=cpu
+source /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/_env.sh
+echo "row $ROW"
 
 for env in chgnet orb; do
     test -d "$OXW_CONDA_BASE/envs/$env" || {
