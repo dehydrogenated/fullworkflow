@@ -12,7 +12,7 @@ from dataclasses import dataclass
 import numpy as np
 from ase.data import atomic_numbers, covalent_radii
 from pymatgen.analysis.adsorption import AdsorbateSiteFinder
-from pymatgen.core import Lattice, Molecule, Structure
+from pymatgen.core import Molecule, Structure
 from pymatgen.core.surface import SlabGenerator
 from pymatgen.symmetry.analyzer import SpacegroupAnalyzer
 
@@ -113,24 +113,40 @@ def exposed_surface_atoms(
 # artifact, not a real tilt of this tetragonal facet's flat-by-symmetry layers. Seen as
 # b_z=-1.19 A on a real eSEN TiO2(110) slab vs. Orb-v2's ~-0.003 A on the same facet --
 # small per-model differences in converged bulk lattice constants tip this from negligible
-# to large. Rebuilding with a_z=b_z=0 at fixed fractional coordinates removes it: two
-# atoms in the same crystallographic layer no longer land up to ~1 A apart in Cartesian z.
-def _orthogonalize_inplane_lattice(slab: Structure, atol: float = 1e-3) -> Structure:
-    m = slab.lattice.matrix.copy()
-    if abs(m[2][0]) > atol or abs(m[2][1]) > atol:
+# to large.
+#
+# Whether it fires depends on min_vacuum_size, which has no business touching in-plane
+# geometry: on mp-2657(110) the cut is clean at 5/13/25/30/50 A of vacuum and sheared at
+# 8/16/20/35/40 (measured, not assumed), and 7 of 12 committed materials shear at the 20 A
+# default. The cost is real -- the sheared cell compresses b from 6.5052 to 6.4784 A (0.41%)
+# and, since every slab stage runs relax_cell=False, that strain is frozen for the whole
+# relaxation. It also breaks the symmetry symm_reduce would otherwise use to merge
+# equivalent sites, inflating TiO2(110) from 2 vacancy / 12 adsorbate sites to 3 / 19.
+#
+# An earlier fix rebuilt the cell with a_z=b_z=0 at fixed fractional coordinates. That only
+# moves atoms along z, so it squared up the *box* while leaving the crystal inside it leaning
+# by the same 0.09 A per 1 A of depth -- and made the defect harder to spot, because
+# lattice.angles then reports a clean 90/90/90. pymatgen's Slab.get_orthogonal_c_slab() moves
+# the atoms as well, so make_slab uses that; it is only reachable before Structure.from_sites()
+# drops the Slab subclass, which is why the call order below matters.
+def _require_orthogonal_c(slab: Structure, context: str, atol_deg: float = 1e-3) -> None:
+    """Fail loudly if c isn't perpendicular to the surface plane.
+
+    ``a`` and ``b`` span the surface and ``c`` is the vacuum direction, so alpha and beta
+    must be 90 degrees or the slab sits tilted inside its own box. ``gamma`` is deliberately
+    NOT checked: it is the surface cell's own shape -- legitimately 72.2 deg on WO2(110) and
+    90.8 deg on LaCoO3(110) -- and forcing it to 90 would distort real crystals.
+    """
+    alpha, beta, gamma = slab.lattice.angles
+    off = [f"{n}={v:.4f}" for n, v in (("alpha", alpha), ("beta", beta))
+           if abs(v - 90.0) > atol_deg]
+    if off:
         raise ValueError(
-            f"slab's c-vector isn't vertical (c={m[2]}) -- in-plane orthogonalization "
-            "assumes a,b span the surface and c is the vacuum/out-of-plane direction"
+            f"{context}: slab c-vector is not perpendicular to the surface ({', '.join(off)}; "
+            f"gamma={gamma:.4f} is the surface cell shape and is not checked). The slab is "
+            "tilted inside its own box, which strains the in-plane lattice and breaks the "
+            "symmetry used to merge equivalent sites."
         )
-    if abs(m[0][2]) < atol and abs(m[1][2]) < atol:
-        return slab  # already clean, common case (e.g. the (100) facet) -- no rebuild needed
-    clean = m.copy()
-    clean[0][2] = 0.0
-    clean[1][2] = 0.0
-    return Structure(
-        Lattice(clean), slab.species, slab.frac_coords,
-        site_properties=slab.site_properties, coords_are_cartesian=False,
-    )
 
 
 # Cuts the configured facet/termination from a relaxed bulk, replicates it to the configured
@@ -152,8 +168,10 @@ def make_slab(bulk: Structure, config: SlabConfig) -> Structure:
             f"termination_index {config.termination_index} out of range "
             f"({len(slabs)} terminations available)"
         )
-    slab = Structure.from_sites(slabs[config.termination_index].sites)
-    slab = _orthogonalize_inplane_lattice(slab)
+    # get_orthogonal_c_slab() before from_sites(): it lives on pymatgen's Slab subclass,
+    # which from_sites() discards. See the shear note above _require_orthogonal_c.
+    slab = Structure.from_sites(slabs[config.termination_index].get_orthogonal_c_slab().sites)
+    _require_orthogonal_c(slab, f"{config.miller_index} termination {config.termination_index}")
     nx, ny = config.supercell
     if (nx, ny) != (1, 1):
         slab.make_supercell([nx, ny, 1])
