@@ -73,4 +73,4 @@ D="$PROJECT/runs/mo2_sweep_3d"  # fixed name (no timestamp) -- predictable targe
 # and safe to resubmit into: rsync -a just updates it, same append-safety as results.jsonl itself
 echo "    mkdir -p $D && rsync -a $OUT/ $D/ && cp $SLURM_SUBMIT_DIR/slurm-${SLURM_JOB_ID}.{out,err} $D/"
 echo "then pull it to your laptop with:"
-echo "    scripts/slurm/sync_sockeye_runs.sh $(basename "$D")"
+echo "    scripts/core/sync_sockeye_runs.sh $(basename "$D")"

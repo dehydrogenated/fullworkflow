@@ -6,8 +6,8 @@
 # this script runs from the local machine and does scratch's *destination* -> here.
 #
 # Usage:
-#   scripts/slurm/sync_sockeye_runs.sh                    # pull the whole remote runs/ tree
-#   scripts/slurm/sync_sockeye_runs.sh mo2_ads_benchmark   # pull just one run subdirectory
+#   scripts/core/sync_sockeye_runs.sh                    # pull the whole remote runs/ tree
+#   scripts/core/sync_sockeye_runs.sh mo2_ads_benchmark   # pull just one run subdirectory
 set -euo pipefail
 
 REMOTE_HOST="ssong18@sockeye.arc.ubc.ca"  # NOT arc.sockeye.ubc.ca -- that hostname doesn't
