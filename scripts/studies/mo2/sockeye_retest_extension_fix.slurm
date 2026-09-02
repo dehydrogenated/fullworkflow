@@ -5,23 +5,31 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --time=2:00:00
-#SBATCH --job-name=run-stage
+#SBATCH --time=1:00:00
+#SBATCH --job-name=retest-ext
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #
-# scripts/core/run_stage.py on Sockeye -- one stage (bulk/slab/vacancy/adsorbate), one model,
-# skipping every stage after the one requested. For OVFE-only comparisons this avoids the
-# adsorbate sweep that dominates a full oxide_workflow.pipeline run. Submit from /scratch,
-# with an explicit --outdir per model so parallel submissions don't collide:
+# Re-runs the 7 legs that didn't converge in the medium test, after the worker_relax.py
+# extension-logic fix (compare against the anchor's start distance, not a rolling
+# per-window baseline). scripts/studies/mo2/retest_extension_fix.py has the exact list
+# and old numbers for comparison. Points at the medium test's OWN output directory so
+# bulk/slab resume from the already-converged cached leaves (pipeline._resume) instead of
+# recomputing -- verified locally: first relax_bulk_slab call ~67s, second (resumed) call
+# ~0.1s, identical energy. Only the adsorbate leg (which always relaxes fresh, no resume
+# check on that path) actually spends new compute.
+#
+# GPU recommended -- 7 legs, should be quick either way, but no reason not to:
+#   sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=1:00:00 \
+#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/studies/mo2/sockeye_retest_extension_fix.slurm
+#
+# PREREQUISITES:
+#   1. Repo up to date: git pull origin main (needs the extension-logic fix commit)
+#   2. runs/mo2_medium_test/ must already exist from the medium test job -- this reuses it,
+#      does not recreate it from scratch
 #
 #   cd /scratch/st-akkiraju-1/$USER
-#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_run_stage.slurm \
-#          vacancy --model UMA-M-omat --outdir runs/ovfe_uma_m_omat
-#
-#   sbatch --account=st-akkiraju-1-gpu --partition=gpu --gres=gpu:1 --time=0:30:00 \
-#          /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/slurm/sockeye_run_stage.slurm \
-#          vacancy --model UMA-M-oc20 --outdir runs/ovfe_uma_m_oc20
+#   sbatch /arc/project/st-akkiraju-1/ssong18/fullworkflow/scripts/studies/mo2/sockeye_retest_extension_fix.slurm
 
 set -euo pipefail
 
@@ -64,17 +72,14 @@ cd "$SLURM_SUBMIT_DIR"
 
 echo "job $SLURM_JOB_ID on $(hostname), ${SLURM_CPUS_PER_TASK:-?} cpus, device $OXW_DEVICE"
 
-test -f "$OXW_MODEL_DIR/mace-mh-1.model" || {
-    echo "missing checkpoint: $OXW_MODEL_DIR/mace-mh-1.model" >&2
+OUT="$SLURM_SUBMIT_DIR/runs/mo2_medium_test"
+test -d "$OUT" || {
+    echo "missing $OUT -- this reuses the medium test's own output dir, run that first" >&2
     exit 1
 }
-test -f "$OXW_MODEL_DIR/uma-m-1p1.pt" || echo "note: uma-m-1p1.pt not staged (needed for UMA-M-* models)"
 
-# Everything after the script path forwards straight to run_stage.py -- stage, --model,
-# --outdir, and any geometry/relax overrides, exactly like running it locally.
-python "$REPO/scripts/core/run_stage.py" "$@"
+python "$REPO/scripts/studies/mo2/retest_extension_fix.py" "$OUT"
 
 echo
-echo "results in scratch under the --outdir you passed above"
-echo "to keep them, run this on the LOGIN node (scratch is purged on a timer):"
-echo "    mkdir -p $PROJECT/runs && rsync -a \$SLURM_SUBMIT_DIR/<outdir>/ $PROJECT/runs/\$(date +%Y%m%d-%H%M%S)_<outdir>/"
+echo "appended to: $OUT/results.jsonl (dedupe by keeping the LAST row per"
+echo "  (model, oxide, facet, adsorbate) if analyzing alongside the original medium-test rows)"

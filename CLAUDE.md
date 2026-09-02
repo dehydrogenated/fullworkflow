@@ -46,8 +46,22 @@ python scripts/core/report.py runs/latest
 ### Script layout
 
 - `scripts/core/` — the tools above: fetching structures, running stages, reporting. Stable, documented entry points.
-- `scripts/ClaudeScripts/` — one-off benchmarks, probes, and reports built for specific investigations (not part of the documented workflow; may assume a particular run already exists).
-- `scripts/slurm/` — Sockeye job scripts (`.sh`/`.slurm`, submitted via `sbatch`) plus `sync_sockeye_runs.sh`, which pulls results back to this laptop and is the one script here that isn't itself a submitted job.
+- `scripts/studies/<theme>/` — one investigation per folder, holding **both** the `.py` and the
+  `.slurm` that runs it, so a study is readable and re-runnable from one directory. Themes are
+  `ovfe/` (vacancy-formation-energy convergence sweeps), `mo2/` (the rutile MO2 family sweep and
+  its regression checks), and `molecular/` (per-adsorbate literature comparisons). Cross-cutting
+  scripts belonging to no single study sit loose at `scripts/studies/`. Not part of the documented
+  workflow; may assume a particular run already exists.
+- `scripts/slurm/` — only the jobs that aren't tied to one study (they run `oxide_workflow.pipeline`
+  or `scripts/core/run_stage.py`), plus `sync_sockeye_runs.sh`, which pulls results back to this
+  laptop and is the one script here that isn't itself a submitted job.
+
+A study's `.slurm` living beside its `.py` is deliberate and safe: SLURM only cares about the
+**working directory at submission time** (must be `/scratch`), never where the job file lives.
+
+Scripts resolve the repo root by walking up to the `pyproject.toml` marker, never by counting
+parents — a hardcoded `parents[N]` silently resolves to the wrong directory the next time a file
+moves, which has already happened twice in this tree.
 
 ## Architecture
 

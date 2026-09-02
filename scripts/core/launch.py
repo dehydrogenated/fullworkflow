@@ -1,6 +1,6 @@
 """Interactive launcher — pick a run from menus instead of remembering flags.
 
-    python scripts/launch.py
+    python scripts/core/launch.py
 
 Every prompt lists what is *actually* available right now — materials that resolve
 offline, registered adsorbate fragments, registered model heads — so this doubles as the
@@ -224,7 +224,7 @@ def main() -> None:
         print(f"min E_ads (reference): {summary.get('reference_min_e_ads')} eV")
         for name, d in summary["per_candidate"].items():
             print(f"min E_ads ({name}): {d.get('min_e_ads')} eV")
-        print(f"\nreport:  python scripts/report.py {outdir}")
+        print(f"\nreport:  python scripts/core/report.py {outdir}")
     except KeyboardInterrupt:
         print("\ninterrupted — partial results are on disk; report.py reads them")
     finally:

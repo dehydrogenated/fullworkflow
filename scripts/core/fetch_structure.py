@@ -4,7 +4,7 @@ One-time bootstrap per material: run this on a networked machine, commit the .ci
 pair it writes, then point RunConfig.polymorph at the same id. MP_API_KEY is only needed
 here — the pipeline itself never reads it.
 
-    MP_API_KEY=... python scripts/fetch_structure.py mp-2657
+    MP_API_KEY=... python scripts/core/fetch_structure.py mp-2657
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def main(mp_id: str) -> None:
     if not api_key:
         raise SystemExit(
             "MP_API_KEY is not set. Get a key from materialsproject.org (profile -> API), "
-            "then re-run as `MP_API_KEY=your_key python scripts/fetch_structure.py "
+            "then re-run as `MP_API_KEY=your_key python scripts/core/fetch_structure.py "
             f"{mp_id}`. Do not hardcode it — this file is committed."
         )
 

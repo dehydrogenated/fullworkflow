@@ -1,8 +1,8 @@
 """Dry-check every material before committing CPU to it — no relaxation, seconds per run.
 
-    python scripts/validate_materials.py                  # everything that resolves offline
-    python scripts/validate_materials.py mp-2657 mp-856
-    python scripts/validate_materials.py --miller 101
+    python scripts/core/validate_materials.py                  # everything that resolves offline
+    python scripts/core/validate_materials.py mp-2657 mp-856
+    python scripts/core/validate_materials.py --miller 101
 
 Builds the whole structural chain (bulk -> slab -> vacancy -> adsorbate placement) with the
 MLIP never invoked, and reports what each stage produced. Every failure it catches would

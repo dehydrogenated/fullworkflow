@@ -1,8 +1,8 @@
 """Fetch the rutile-structure oxide family into data/structures/ in one go.
 
-    MP_API_KEY=... python scripts/fetch_rutiles.py            # the curated set
-    MP_API_KEY=... python scripts/fetch_rutiles.py --discover # list the family, fetch nothing
-    MP_API_KEY=... python scripts/fetch_rutiles.py --formulas TiO2 SnO2
+    MP_API_KEY=... python scripts/core/fetch_rutiles.py            # the curated set
+    MP_API_KEY=... python scripts/core/fetch_rutiles.py --discover # list the family, fetch nothing
+    MP_API_KEY=... python scripts/core/fetch_rutiles.py --formulas TiO2 SnO2
 
 Materials Project ids are opaque integers, so this resolves them by *querying* rather than
 hardcoding: every entry is found by formula **plus spacegroup 136 (P4_2/mnm)**, which is
@@ -143,7 +143,7 @@ def main(formulas: list[str], do_discover: bool, include_hard: bool) -> None:
     if missing:
         print(f"not found: {', '.join(missing)}")
     if ok:
-        print("\nnext: python scripts/validate_materials.py")
+        print("\nnext: python scripts/core/validate_materials.py")
 
 
 if __name__ == "__main__":

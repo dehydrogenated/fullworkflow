@@ -5,20 +5,20 @@ stage, either chaining from the configured material or starting from a structure
 already have, so you can change one knob and see its effect in minutes instead of hours.
 
     # quick bulk relax
-    python scripts/run_stage.py bulk
+    python scripts/core/run_stage.py bulk
 
     # quick slab relax, thicker and with 80% of the bottom frozen
-    python scripts/run_stage.py slab --thickness 20 --freeze 0.8
+    python scripts/core/run_stage.py slab --thickness 20 --freeze 0.8
 
     # a different facet, and a different termination of it
-    python scripts/run_stage.py slab --miller 101
-    python scripts/run_stage.py slab --termination 0
+    python scripts/core/run_stage.py slab --miller 101
+    python scripts/core/run_stage.py slab --termination 0
 
     # vacancy screening on a slab that is ALREADY relaxed
-    python scripts/run_stage.py vacancy --from runs/practice/slab/CONTCAR
+    python scripts/core/run_stage.py vacancy --from runs/practice/slab/CONTCAR
 
     # adsorbate screening on an already-relaxed vacancy slab
-    python scripts/run_stage.py adsorbate --from runs/xyz/vacancy/site4_8d/CONTCAR --adsorbate O2
+    python scripts/core/run_stage.py adsorbate --from runs/xyz/vacancy/site4_8d/CONTCAR --adsorbate O2
 
 ``--from`` accepts any CIF/POSCAR/CONTCAR, and skips every stage before the one requested.
 Without it, the stage chains from ``RunConfig.polymorph``, relaxing whatever it needs

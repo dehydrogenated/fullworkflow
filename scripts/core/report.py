@@ -8,8 +8,8 @@ Reads the three run-root tables — ``summary.json``, ``divergence.jsonl``,
    the reference? A model can reproduce the reference's geometry closely and still rank
    sites differently, which is the failure mode that matters for screening.
 
-    python scripts/report.py runs/COtest_july29
-    python scripts/report.py runs/H_oc20_0729 --no-plot
+    python scripts/core/report.py runs/COtest_july29
+    python scripts/core/report.py runs/H_oc20_0729 --no-plot
 
 Safe to run mid-run: both tables are appended as stages finish, so a partial run reports
 whatever has landed so far.
@@ -262,7 +262,7 @@ def print_collection(rundir: Path, runs: list[tuple[str, dict]]) -> None:
               f"{f(s.get('reference_min_e_ads')):>11s}{f(s.get('reference_min_e_vac')):>11s}"
               f"{s.get('total_elapsed_s', 0) / 3600:>8.1f}   {name}")
     print("\nE_ads and E_vac are comparable across materials; raw total energies are not.")
-    print(f"per-run detail:  python scripts/report.py {rundir}/<run>\n")
+    print(f"per-run detail:  python scripts/core/report.py {rundir}/<run>\n")
 
 
 def main(rundir: Path, do_plot: bool) -> None:

@@ -1,8 +1,8 @@
 """Run one adsorbate across the whole rutile family in a single command.
 
-    python scripts/run_family.py --dry-run          # plan + cost, runs nothing
-    python scripts/run_family.py
-    python scripts/run_family.py --adsorbate O2 --cap 6 --candidates MACE-mh1-oc20
+    python scripts/core/run_family.py --dry-run          # plan + cost, runs nothing
+    python scripts/core/run_family.py
+    python scripts/core/run_family.py --adsorbate O2 --cap 6 --candidates MACE-mh1-oc20
 
 Restartable by design: a family sweep runs for days, so a material that already has a
 ``summary.json`` is skipped and a material that raises is recorded in ``batch.json`` and
@@ -34,8 +34,8 @@ from pathlib import Path
 from oxide_workflow import pipeline
 from oxide_workflow.config import ADSORBATE_FRAGMENTS, RunConfig
 
-# The well-behaved rutile family, as fetched by scripts/fetch_rutiles.py and confirmed by
-# scripts/validate_materials.py (termination 1 is stoichiometric, non-polar and symmetric
+# The well-behaved rutile family, as fetched by scripts/core/fetch_rutiles.py and confirmed by
+# scripts/core/validate_materials.py (termination 1 is stoichiometric, non-polar and symmetric
 # for every one).
 RUTILES = {
     "mp-2657": "TiO2",
